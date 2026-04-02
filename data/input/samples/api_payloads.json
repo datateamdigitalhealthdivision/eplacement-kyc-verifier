@@ -1,0 +1,12 @@
+﻿{
+  "run_job": {
+    "applicant_path": "data/input/samples/demo_applicants.csv",
+    "pdf_directory": "data/input/pdfs",
+    "auto_download": true,
+    "retry_failed_only": false
+  },
+  "override_review": {
+    "override_status": "CONFIRMED",
+    "reviewer_note": "Verified against source certificate."
+  }
+}

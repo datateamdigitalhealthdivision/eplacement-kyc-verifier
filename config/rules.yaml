@@ -1,0 +1,23 @@
+thresholds:
+  fuzzy_name_threshold: 0.85
+  partial_name_threshold: 0.70
+  minimum_ocr_confidence: 0.70
+  minimum_extraction_confidence: 0.65
+  jawi_manual_review_threshold: 0.80
+  direct_text_char_minimum: 40
+
+logic:
+  married_values:
+    - BERKAHWIN
+    - BERKAHWIN_BERPASANGAN
+  no_postgraduate_values:
+    - TIDAK BERKENAAN
+    - TIDAK RELEVAN
+    - NONE
+    - ""
+  no_oku_values:
+    - TIADA
+    - NONE
+    - NO
+    - "0"
+    - ""

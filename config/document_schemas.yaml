@@ -1,0 +1,35 @@
+document_types:
+  marriage_certificate:
+    display_name: Marriage Certificate
+    extraction_schema: marriage_evidence
+    validation_rule: marriage
+    regex_hints:
+      - SURAT PERAKUAN NIKAH
+      - SIJIL NIKAH
+      - MARRIAGE CERTIFICATE
+      - Nombor Daftar
+      - Tarikh Nikah
+  medex_or_exam_document:
+    display_name: Postgraduate / MedEX / Exam Supporting Document
+    extraction_schema: medex_evidence
+    validation_rule: medex
+    regex_hints:
+      - MedEX
+      - Peperiksaan Kemasukan
+      - Keputusan
+      - Candidate
+      - Examination
+      - GCFM
+  other_supporting_document:
+    display_name: Other Supporting Document
+    extraction_schema: generic_evidence
+    validation_rule: generic
+    regex_hints:
+      - Supporting Document
+      - Letter
+      - Certification
+  unknown:
+    display_name: Unknown
+    extraction_schema: generic_evidence
+    validation_rule: generic
+    regex_hints: []

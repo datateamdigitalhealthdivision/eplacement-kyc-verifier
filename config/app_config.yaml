@@ -1,0 +1,59 @@
+app:
+  name: eplacement-kyc-verifier
+  timezone: Asia/Kuala_Lumpur
+  debug: false
+
+paths:
+  applicants_dir: data/input/applicants
+  pdf_dir: data/input/pdfs
+  sample_dir: data/input/samples
+  downloads_dir: data/working/downloads
+  extracted_text_dir: data/working/extracted_text
+  page_images_dir: data/working/page_images
+  ocr_json_dir: data/working/ocr_json
+  llm_json_dir: data/working/llm_json
+  cache_dir: data/working/cache
+  db_path: data/working/db/kyc.sqlite3
+  reports_dir: data/output/reports
+  merged_dir: data/output/merged
+  review_dir: data/output/review
+  logs_dir: data/output/logs
+
+ollama:
+  host: http://localhost:11434
+  model: qwen2.5:7b-instruct
+  image_model: qwen2.5vl:7b
+  vision_enabled: true
+  vision_max_images: 3
+  timeout_seconds: 120
+  enabled: true
+
+langflow:
+  base_url: http://localhost:7860
+  enabled: true
+
+batch:
+  concurrency: 2
+  retry_count: 2
+  auto_download: true
+  chunk_size: 25
+
+ocr:
+  dpi: 225
+  direct_text_min_chars: 40
+  direct_text_min_alpha_ratio: 0.18
+  low_confidence_threshold: 0.70
+  tesseract_languages: eng+msa+ara
+  language_hints:
+    - eng
+    - msa
+    - ara
+  use_paddle_fallback: true
+  retain_raw_text: true
+
+privacy:
+  redact_logs: true
+  retain_raw_ocr_text: true
+
+logging:
+  level: INFO

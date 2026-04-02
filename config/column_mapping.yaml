@@ -1,0 +1,83 @@
+columns:
+  applicant_id:
+    required: true
+    aliases:
+      - NO KP
+      - no kp
+      - no_kp
+      - applicant_id
+      - applicant id
+  applicant_name:
+    required: false
+    aliases:
+      - NAMA
+      - nama
+      - applicant_name
+      - applicant name
+  marital_status:
+    required: false
+    aliases:
+      - MARITAL_STATUS
+      - marital_status
+      - marital status
+  spouse_name:
+    required: false
+    aliases:
+      - Nama Pasangan
+      - spouse_name
+      - spouse name
+  spouse_id:
+    required: false
+    aliases:
+      - NoKPPasangan
+      - spouse_id
+      - spouse id
+  postgraduate_status:
+    required: false
+    aliases:
+      - POSTGRADUATE_PAPER_STATUS
+      - postgraduate_status
+      - postgraduate paper status
+  applicant_oku_status:
+    required: false
+    aliases:
+      - StatusOKU
+      - status_oku
+      - oku_status
+      - applicant_oku_status
+  email:
+    required: false
+    aliases:
+      - EMAIL
+      - EMEL
+      - email
+  gender:
+    required: false
+    aliases:
+      - GENDER
+      - gender
+  current_headquarters:
+    required: false
+    aliases:
+      - CURRENT_HEADQUARTERS
+      - current_headquarters
+  current_placement:
+    required: false
+    aliases:
+      - PENEMPATAN TERKINI
+      - 'PENEMPATAN TERKINI '
+      - current_placement
+  pdf_filename:
+    required: false
+    aliases:
+      - Sheet1.NamaFail
+      - NamaFail
+      - pdf_filename
+      - pdf file name
+  pdf_url:
+    required: false
+    aliases:
+      - Sheet1.DownloadURL
+      - DownloadURL
+      - pdf_url
+      - download_url
