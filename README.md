@@ -6,8 +6,9 @@
 
 - A single-page Streamlit operator UI for `Upload -> Run -> Check`
 - A FastAPI backend for jobs, health, review records, and exports
-- A reusable Python pipeline under `src/`
-- Optional Langflow components and an importable flow JSON for visual orchestration
+- A Langflow-first orchestration layer under `src/orchestration/`
+- Reusable custom Langflow components under `src/langflow_components/`
+- Lower-level OCR, classification, extraction, and rules modules under `src/`
 - Local SQLite audit storage and CSV/XLSX/JSON exports
 
 ## Start here
@@ -61,7 +62,7 @@ Unix shell:
 bash scripts/run_streamlit.sh
 ```
 
-### 4. Optional: use Langflow
+### 4. Optional: inspect the same chain in Langflow
 
 Import `flows/evidence_verification_flow.json` after reading [docs/langflow.md](docs/langflow.md).
 
@@ -74,14 +75,16 @@ data/input/samples/     Safe demo assets
 docs/                   Project documentation
 flows/                  Langflow flow definition
 scripts/                Setup and launch helpers
-src/                    Reusable pipeline code
+src/                    Orchestration, pipeline, and backend code
 tests/                  Unit and smoke tests
 ```
 
 ## Runtime notes
 
 - The Streamlit app is single-page and intentionally simple.
-- Langflow is optional and is kept thin on purpose.
+- The live app and API use the Langflow-shaped orchestration runner in `src/orchestration/langflow_first_pass.py`.
+- The custom components in `src/langflow_components/` are the source of truth for each node in that chain.
+- `src/services/batch_processor.py` is kept as a legacy direct runner for comparison and regression testing.
 - Real applicant data, generated outputs, caches, and logs should stay out of git.
 - The root `.gitignore` is set up for a repo-first workflow.
 
@@ -90,5 +93,3 @@ tests/                  Unit and smoke tests
 ```bash
 pytest
 ```
-
-

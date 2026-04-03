@@ -8,7 +8,7 @@ from pathlib import Path
 from src.db.models import OverrideRequest, RetryFailedRequest, RunJobRequest
 from src.db.sqlite_store import SQLiteStore
 from src.llm.ollama_client import OllamaClient
-from src.services.batch_processor import BatchProcessor
+from src.orchestration.langflow_first_pass import LangflowFirstPassRunner
 from src.services.healthcheck import HealthcheckService
 from src.services.review_queue import ReviewQueueService
 from src.settings import load_app_config
@@ -20,7 +20,7 @@ class PipelineService:
         self.settings = load_app_config(project_root=root)
         self.store = SQLiteStore(self.settings.paths.db_path)
         self.llm_client = OllamaClient(self.settings)
-        self.batch_processor = BatchProcessor(self.settings, self.store, self.llm_client)
+        self.flow_runner = LangflowFirstPassRunner(self.settings, self.store, self.llm_client)
         self.review_queue = ReviewQueueService(self.store)
         self.healthcheck = HealthcheckService(self.settings, self.store, self.llm_client)
         self._threads: dict[str, threading.Thread] = {}
@@ -38,7 +38,7 @@ class PipelineService:
         include_applicant_ids: set[str] | None = None,
     ) -> None:
         try:
-            self.batch_processor.execute_job(job_id, request, include_applicant_ids)
+            self.flow_runner.execute_job(job_id, request, include_applicant_ids)
         except Exception as exc:  # noqa: BLE001
             self._record_job_failure(job_id, exc)
 
@@ -55,7 +55,7 @@ class PipelineService:
             self._threads[job.job_id] = thread
             return self.store.get_job(job.job_id)
         try:
-            self.batch_processor.execute_job(job.job_id, request)
+            self.flow_runner.execute_job(job.job_id, request)
         except Exception as exc:  # noqa: BLE001
             self._record_job_failure(job.job_id, exc)
             raise
@@ -83,7 +83,7 @@ class PipelineService:
             self._threads[job.job_id] = thread
             return self.store.get_job(job.job_id)
         try:
-            self.batch_processor.execute_job(job.job_id, run_request, failed_ids)
+            self.flow_runner.execute_job(job.job_id, run_request, failed_ids)
         except Exception as exc:  # noqa: BLE001
             self._record_job_failure(job.job_id, exc)
             raise

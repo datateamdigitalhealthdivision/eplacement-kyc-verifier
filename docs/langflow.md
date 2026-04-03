@@ -1,33 +1,51 @@
 # Langflow Guide
 
-Langflow is optional in this repo. The FastAPI and Streamlit paths call the same underlying services directly, while Langflow gives you a visual way to inspect or prototype the pipeline.
+Langflow is the primary orchestration model in this repo.
+
+The Streamlit app and FastAPI backend do not bypass the flow anymore. They call `src/orchestration/langflow_first_pass.py`, which runs the same node sequence defined in `flows/evidence_verification_flow.json` and implemented in `src/langflow_components/`.
 
 ## Files that matter
 
-- `flows/evidence_verification_flow.json`: importable Langflow flow
-- `src/langflow_components/`: custom component implementations
-- `src/langflow_components/registry.py`: component catalog used as the source of truth for what the flow exposes
+- `flows/evidence_verification_flow.json`: the visual flow definition
+- `src/langflow_components/`: custom node implementations used by both the flow and the live runner
+- `src/orchestration/langflow_first_pass.py`: the runtime runner that executes the Langflow-shaped chain
+- `src/orchestration/result_builder.py`: shared helpers for building evidence rows and summaries from the flow
+- `src/langflow_components/registry.py`: component catalog for the flow
 
 ## Current component chain
 
 1. `ApplicantLoaderComponent`
-   - loads the spreadsheet with the same `SpreadsheetLoader` used by the app
+   - loads and canonicalizes the spreadsheet
 2. `PDFFetchComponent`
    - finds a local PDF or downloads it from the spreadsheet URL
 3. `OCRRouterComponent`
    - produces OCR text, page images, hashes, and OCR metadata
 4. `DocClassifierComponent`
-   - classifies using OCR text plus page images, so the visual path stays aligned with the live app
+   - classifies using OCR text plus page images
 5. `EvidenceExtractorComponent`
    - runs the document-specific extractor
 6. `RulesValidatorComponent`
-   - applies deterministic Python rules for the final rule outcome
+   - applies deterministic Python rules for the final outcome
 7. `ExportWriterComponent`
-   - writes the same merged and review artifacts used elsewhere in the repo
+   - writes the same merged and review artifacts used by the app
 
-## Why this matters
+## How to think about the architecture
 
-The Langflow layer is intentionally thin. It should not contain separate business logic. Each component wraps the same Python modules that FastAPI and Streamlit use, which keeps visual experimentation and production behavior aligned.
+- Langflow owns orchestration.
+- The Python modules under `src/ocr/`, `src/classification/`, `src/extraction/`, and `src/rules/` are the step implementations.
+- The runner in `src/orchestration/langflow_first_pass.py` is there so the app can execute the same Langflow-shaped chain without requiring a Langflow server to be running.
+- `src/services/batch_processor.py` is now a legacy direct runner kept for regression comparison and troubleshooting, not the main runtime path.
+
+## Where Qwen/Ollama fits in the flow
+
+- `src/llm/ollama_client.py` sends text requests to `qwen2.5:7b-instruct` and vision requests to `qwen2.5vl:7b`.
+- `OCRRouterComponent` gives the document both OCR text and page image paths.
+- `DocClassifierComponent` sends page images to Qwen vision when available.
+- `EvidenceExtractorComponent` uses the same page images for document-specific field extraction.
+
+So the actual multimodal path is:
+
+`PDF -> OCR Router -> page images + OCR text -> Doc Classifier / Evidence Extractor -> Rules Validator`
 
 ## Local startup notes
 
@@ -41,6 +59,8 @@ Typical launch flow:
 4. Start Langflow from the repository root.
 5. Import `flows/evidence_verification_flow.json`.
 
-## Reading the flow in code
+## When you want to change the flow
 
-If you want to understand what a node does, open the matching file in `src/langflow_components/`. The component names in Langflow match the class names listed in `src/langflow_components/registry.py`.
+- Change the node implementation: edit the matching file in `src/langflow_components/`.
+- Change the live app/API behavior: keep `src/orchestration/langflow_first_pass.py` aligned with the component chain.
+- Change the visual flow: update `flows/evidence_verification_flow.json` so the diagram still matches the runtime.

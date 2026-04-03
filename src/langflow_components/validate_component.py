@@ -1,8 +1,8 @@
-﻿"""Langflow component for rules validation."""
+"""Langflow component for rules validation."""
 
 from __future__ import annotations
 
-from src.extraction.evidence_models import GenericEvidence, MarriageEvidence, MedexEvidence, OCRDocument
+from src.extraction.evidence_models import GenericEvidence, MarriageEvidence, MedexEvidence, OCRDocument, ValidationDecision
 from src.langflow_components._base import Component
 from src.rules.marriage_rules import validate_marriage
 from src.rules.medex_rules import validate_medex
@@ -14,13 +14,22 @@ class RulesValidatorComponent(Component):
     description = "Apply transparent Python rules to extracted evidence."
     name = "RulesValidatorComponent"
 
+    def validate_document(self, applicant_row: dict, ocr_document: OCRDocument, extracted_evidence: MarriageEvidence | MedexEvidence | GenericEvidence, target_type: str) -> ValidationDecision:
+        if target_type == "marriage_certificate":
+            evidence = MarriageEvidence.model_validate(extracted_evidence)
+            return validate_marriage(applicant_row, evidence, ocr_document)
+        if target_type == "medex_or_exam_document":
+            evidence = MedexEvidence.model_validate(extracted_evidence)
+            return validate_medex(applicant_row, evidence, ocr_document)
+        evidence = GenericEvidence.model_validate(extracted_evidence)
+        return generic_document_decision(evidence, ocr_document)
+
     def run_model(self, applicant_row: dict, ocr_document: dict, extracted_evidence: dict, target_type: str) -> dict:
         document = OCRDocument.model_validate(ocr_document)
         if target_type == "marriage_certificate":
             evidence = MarriageEvidence.model_validate(extracted_evidence)
-            return validate_marriage(applicant_row, evidence, document).model_dump(mode="json")
-        if target_type == "medex_or_exam_document":
+        elif target_type == "medex_or_exam_document":
             evidence = MedexEvidence.model_validate(extracted_evidence)
-            return validate_medex(applicant_row, evidence, document).model_dump(mode="json")
-        evidence = GenericEvidence.model_validate(extracted_evidence)
-        return generic_document_decision(evidence, document).model_dump(mode="json")
+        else:
+            evidence = GenericEvidence.model_validate(extracted_evidence)
+        return self.validate_document(applicant_row, document, evidence, target_type).model_dump(mode="json")

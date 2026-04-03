@@ -1,12 +1,13 @@
-﻿"""Langflow component for OCR routing."""
+"""Langflow component for OCR routing."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from src.extraction.evidence_models import OCRDocument
 from src.langflow_components._base import Component
 from src.ocr.ocr_router import OCRRouter
-from src.settings import load_app_config
+from src.settings import AppConfig, load_app_config
 
 
 class OCRRouterComponent(Component):
@@ -14,8 +15,14 @@ class OCRRouterComponent(Component):
     description = "Run direct text extraction, OCR, and fallback routing for a PDF bundle."
     name = "OCRRouterComponent"
 
+    def __init__(self, settings: AppConfig | None = None, project_root: Path | None = None, **kwargs):
+        super().__init__(**kwargs)
+        root = project_root or Path(__file__).resolve().parents[2]
+        self.settings = settings or load_app_config(project_root=root)
+        self.router = OCRRouter(self.settings)
+
+    def process_document(self, applicant_id: str, pdf_path: str) -> OCRDocument:
+        return self.router.process_document(applicant_id, pdf_path)
+
     def run_model(self, applicant_id: str, pdf_path: str) -> dict:
-        settings = load_app_config(project_root=Path(__file__).resolve().parents[2])
-        router = OCRRouter(settings)
-        document = router.process_document(applicant_id, pdf_path)
-        return document.model_dump(mode="json")
+        return self.process_document(applicant_id, pdf_path).model_dump(mode="json")
