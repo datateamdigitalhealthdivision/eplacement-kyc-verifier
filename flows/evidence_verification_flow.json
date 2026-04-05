@@ -1,7 +1,7 @@
-﻿{
+{
   "name": "ePlacement Evidence Verification",
-  "description": "Applicant Loader -> PDF Fetch -> OCR Router -> Doc Classifier -> Evidence Extractor -> Rules Validator -> Export Writer",
-  "version": "1.0",
+  "description": "Applicant Loader -> PDF Fetch -> OCR Router -> Evidence Signals -> Doc Classifier -> Evidence Extractor -> Rules Validator -> Export Writer",
+  "version": "1.1",
   "nodes": [
     {
       "id": "ApplicantLoaderComponent-1",
@@ -22,34 +22,41 @@
       "data": {"display_name": "OCR Router"}
     },
     {
+      "id": "FirstPassSignalsComponent-1",
+      "type": "FirstPassSignalsComponent",
+      "position": {"x": 720, "y": 0},
+      "data": {"display_name": "Evidence Signals"}
+    },
+    {
       "id": "DocClassifierComponent-1",
       "type": "DocClassifierComponent",
-      "position": {"x": 720, "y": 0},
+      "position": {"x": 960, "y": 0},
       "data": {"display_name": "Doc Classifier"}
     },
     {
       "id": "EvidenceExtractorComponent-1",
       "type": "EvidenceExtractorComponent",
-      "position": {"x": 960, "y": 0},
+      "position": {"x": 1200, "y": 0},
       "data": {"display_name": "Evidence Extractor"}
     },
     {
       "id": "RulesValidatorComponent-1",
       "type": "RulesValidatorComponent",
-      "position": {"x": 1200, "y": 0},
+      "position": {"x": 1440, "y": 0},
       "data": {"display_name": "Rules Validator"}
     },
     {
       "id": "ExportWriterComponent-1",
       "type": "ExportWriterComponent",
-      "position": {"x": 1440, "y": 0},
+      "position": {"x": 1680, "y": 0},
       "data": {"display_name": "Export Writer"}
     }
   ],
   "edges": [
     {"source": "ApplicantLoaderComponent-1", "target": "PDFFetchComponent-1"},
     {"source": "PDFFetchComponent-1", "target": "OCRRouterComponent-1"},
-    {"source": "OCRRouterComponent-1", "target": "DocClassifierComponent-1"},
+    {"source": "OCRRouterComponent-1", "target": "FirstPassSignalsComponent-1"},
+    {"source": "FirstPassSignalsComponent-1", "target": "DocClassifierComponent-1"},
     {"source": "DocClassifierComponent-1", "target": "EvidenceExtractorComponent-1"},
     {"source": "EvidenceExtractorComponent-1", "target": "RulesValidatorComponent-1"},
     {"source": "RulesValidatorComponent-1", "target": "ExportWriterComponent-1"}

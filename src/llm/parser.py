@@ -1,4 +1,4 @@
-﻿"""Helpers for validating local model JSON responses."""
+"""Helpers for validating local model JSON responses."""
 
 from __future__ import annotations
 
@@ -10,6 +10,14 @@ from pydantic import BaseModel
 
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+FIRST_PASS_STATUS_KEYS = {
+    "marriage",
+    "self_illness",
+    "family_illness",
+    "spouse_location",
+    "oku_self_or_family",
+    "medex_or_other_exam",
+}
 
 
 def extract_json_fragment(text: str) -> str:
@@ -75,6 +83,21 @@ def _coerce_string_list(value: Any) -> list[str]:
     return cleaned
 
 
+def _coerce_presence_status(value: Any) -> str:
+    if isinstance(value, bool):
+        return "present" if value else "not_present"
+    normalized = str(value or "").strip().casefold()
+    if not normalized:
+        return "not_present"
+    if normalized in {"present", "yes", "y", "true", "found", "detected"}:
+        return "present"
+    if normalized in {"manual_check", "manual", "unclear", "ambiguous", "uncertain", "possible", "maybe"}:
+        return "manual_check"
+    if normalized in {"not_present", "no", "n", "false", "not found", "absent", "none"}:
+        return "not_present"
+    return "manual_check"
+
+
 def _normalize_payload(payload: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = dict(payload)
     if "confidence" in normalized:
@@ -88,6 +111,9 @@ def _normalize_payload(payload: dict[str, Any], overrides: dict[str, Any] | None
     if "key_supporting_snippets" in normalized:
         normalized["key_supporting_snippets"] = _coerce_string_list(normalized.get("key_supporting_snippets"))
     for key, value in list(normalized.items()):
+        if key in FIRST_PASS_STATUS_KEYS:
+            normalized[key] = _coerce_presence_status(value)
+            continue
         if isinstance(value, str):
             stripped = value.strip()
             normalized[key] = stripped or None

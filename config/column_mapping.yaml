@@ -38,6 +38,19 @@ columns:
       - POSTGRADUATE_PAPER_STATUS
       - postgraduate_status
       - postgraduate paper status
+  personal_health_condition:
+    required: false
+    aliases:
+      - PERSONAL_HEALTH_CONDITION
+      - personal_health_condition
+      - personal health condition
+  personal_health_details:
+    required: false
+    aliases:
+      - Keterangan Kesihatan
+      - keterangan kesihatan
+      - personal_health_details
+      - personal health details
   applicant_oku_status:
     required: false
     aliases:
@@ -45,6 +58,53 @@ columns:
       - status_oku
       - oku_status
       - applicant_oku_status
+  spouse_employment_status:
+    required: false
+    aliases:
+      - SPOUSE_EMPLOYMENT_STATUS
+      - spouse_employment_status
+      - spouse employment status
+  spouse_job_title:
+    required: false
+    aliases:
+      - Pekerjaan Pasangan
+      - pekerjaan pasangan
+      - spouse_job_title
+      - spouse job title
+  spouse_work_address:
+    required: false
+    aliases:
+      - Alamat Bekerja Pasangan
+      - alamat bekerja pasangan
+      - spouse_work_address
+      - spouse work address
+  spouse_work_state:
+    required: false
+    aliases:
+      - NegeriBekerjaPasangan
+      - negeri bekerjapasangan
+      - spouse_work_state
+      - spouse work state
+  spouse_oku_status:
+    required: false
+    aliases:
+      - SPOUSE_STATUS_OKU
+      - spouse_status_oku
+      - spouse_oku_status
+      - spouse oku status
+  spouse_health_condition:
+    required: false
+    aliases:
+      - SPOUSE_HEALTH_CONDITION
+      - spouse_health_condition
+      - spouse health condition
+  spouse_health_details:
+    required: false
+    aliases:
+      - Keterangan Masalah Kesihatan Pasanga
+      - keterangan masalah kesihatan pasanga
+      - spouse_health_details
+      - spouse health details
   email:
     required: false
     aliases:

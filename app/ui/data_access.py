@@ -11,6 +11,17 @@ import streamlit as st
 from app.bootstrap import SERVICE, SETTINGS, SUPPORTED_SPREADSHEET_SUFFIXES
 
 
+TICK_COLUMNS = [
+    "marriage",
+    "self_illness",
+    "family_illness",
+    "spouse_location",
+    "oku_self_or_family",
+    "medex_other_exam",
+]
+STATUS_VALUES = {"present", "not_present", "manual_check"}
+
+
 def candidate_applicant_paths() -> list[Path]:
     applicants_dir = SETTINGS.paths.applicants_dir
     if not applicants_dir.exists():
@@ -80,16 +91,20 @@ def decision_dataframe(bundle: Any) -> pd.DataFrame | None:
     if not path.exists():
         return None
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    for column in TICK_COLUMNS:
+        if column in df.columns and df[column].isin(STATUS_VALUES).any():
+            df[column] = df[column].map(lambda value: "?" if str(value).strip().casefold() == "present" else "")
     columns = [
         column
         for column in [
             "applicant_id",
-            "marriage_doc",
-            "medex_exam_doc",
-            "oku_doc",
+            "marriage",
+            "self_illness",
+            "family_illness",
+            "spouse_location",
+            "oku_self_or_family",
+            "medex_other_exam",
             "check_required",
-            "summary",
-            "original_pdf_url",
             "open_original_pdf",
             "source_pdf_name",
         ]

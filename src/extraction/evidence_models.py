@@ -1,4 +1,4 @@
-﻿"""Shared pydantic models for OCR, extraction, and validation."""
+"""Shared pydantic models for OCR, extraction, and validation."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ DocTypeLiteral = Literal[
     "other_supporting_document",
     "unknown",
 ]
+SignalStatusLiteral = Literal["present", "not_present", "manual_check"]
 
 
 class OCRPage(BaseModel):
@@ -107,6 +108,17 @@ class ValidationDecision(BaseModel):
     low_confidence_flags: list[str] = Field(default_factory=list)
     recommended_action: str | None = None
     final_confidence: float = 0.0
+
+
+class FirstPassEvidenceSignals(BaseModel):
+    marriage: SignalStatusLiteral = "not_present"
+    self_illness: SignalStatusLiteral = "not_present"
+    family_illness: SignalStatusLiteral = "not_present"
+    spouse_location: SignalStatusLiteral = "not_present"
+    oku_self_or_family: SignalStatusLiteral = "not_present"
+    medex_or_other_exam: SignalStatusLiteral = "not_present"
+    reasons: list[str] = Field(default_factory=list)
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvidenceResult(BaseModel):

@@ -28,6 +28,15 @@ def test_merge_back_adds_uploaded_document_columns() -> None:
         manual_review_flag=False,
         audit_payload={
             "result_kind": "observed_document",
+            "first_pass_signals": {
+                "marriage": "present",
+                "self_illness": "not_present",
+                "family_illness": "manual_check",
+                "spouse_location": "not_present",
+                "oku_self_or_family": "not_present",
+                "medex_or_other_exam": "not_present",
+                "reasons": ["Marriage certificate visible", "Possible family illness evidence"],
+            },
             "document_tags": {
                 "primary_document_type": "marriage_certificate",
                 "positive_tags": [
@@ -56,6 +65,8 @@ def test_merge_back_adds_uploaded_document_columns() -> None:
     assert merged.loc[0, "KYC_UPLOADED_DOC_STATUS"] == "CONFIRMED"
     assert bool(merged.loc[0, "KYC_DETECTED_MARRIAGE_CERTIFICATE"]) is True
     assert bool(merged.loc[0, "KYC_DETECTED_MARRIAGE_EVIDENCE"]) is True
+    assert merged.loc[0, "KYC_FIRSTPASS_MARRIAGE"] == "present"
+    assert merged.loc[0, "KYC_FIRSTPASS_FAMILY_ILLNESS"] == "manual_check"
     assert merged.loc[0, "KYC_MARRIAGE_STATUS"] == "CONFIRMED"
     assert merged.loc[0, "KYC_OVERALL_STATUS"] == "CONFIRMED"
 
@@ -82,6 +93,15 @@ def test_merge_back_marks_claim_mismatch_as_manual_review() -> None:
         manual_review_flag=False,
         audit_payload={
             "result_kind": "observed_document",
+            "first_pass_signals": {
+                "marriage": "present",
+                "self_illness": "not_present",
+                "family_illness": "not_present",
+                "spouse_location": "present",
+                "oku_self_or_family": "not_present",
+                "medex_or_other_exam": "manual_check",
+                "reasons": ["Marriage certificate visible", "Placement letter visible", "Possible exam evidence"],
+            },
             "document_tags": {
                 "primary_document_type": "marriage_certificate",
                 "positive_tags": [
@@ -121,10 +141,11 @@ def test_merge_back_marks_claim_mismatch_as_manual_review() -> None:
     assert merged.loc[0, "KYC_UPLOADED_DOC_TYPE"] == "marriage_certificate"
     assert merged.loc[0, "KYC_MARRIAGE_STATUS"] == "CONFIRMED"
     assert bool(merged.loc[0, "KYC_DETECTED_MARRIAGE_EVIDENCE"]) is True
-    assert bool(merged.loc[0, "KYC_DETECTED_MEDEX_EVIDENCE"]) is False
+    assert bool(merged.loc[0, "KYC_DETECTED_MEDEX_EVIDENCE"]) is True
+    assert merged.loc[0, "KYC_FIRSTPASS_SPOUSE_LOCATION"] == "present"
+    assert merged.loc[0, "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM"] == "manual_check"
     assert merged.loc[0, "KYC_MEDEX_STATUS"] == "MANUAL_REVIEW_REQUIRED"
     assert bool(merged.loc[0, "KYC_MEDEX_REVIEW_REQUIRED"]) is True
     assert merged.loc[0, "KYC_OVERALL_STATUS"] == "MANUAL_REVIEW_REQUIRED"
     assert bool(merged.loc[0, "KYC_OVERALL_REVIEW_REQUIRED"]) is True
     assert bool(merged.loc[0, "KYC_NEEDS_MANUAL_REVIEW"]) is True
-

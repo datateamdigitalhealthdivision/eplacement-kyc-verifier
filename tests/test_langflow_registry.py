@@ -7,6 +7,7 @@ def test_component_catalog_lists_expected_components() -> None:
         "ApplicantLoaderComponent",
         "PDFFetchComponent",
         "OCRRouterComponent",
+        "FirstPassSignalsComponent",
         "DocClassifierComponent",
         "EvidenceExtractorComponent",
         "RulesValidatorComponent",
@@ -18,5 +19,6 @@ def test_component_catalog_dict_view_matches_specs() -> None:
     catalog = component_catalog()
     assert len(catalog) == len(COMPONENT_CATALOG)
     assert catalog[0]["display_name"] == "Applicant Loader"
+    assert catalog[3]["class_name"] == "FirstPassSignalsComponent"
     assert catalog[-1]["class_name"] == "ExportWriterComponent"
     assert catalog is not COMPONENT_CATALOG

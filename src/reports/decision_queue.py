@@ -11,6 +11,7 @@ from src.extraction.evidence_models import EvidenceResult
 
 
 DEFAULT_PDF_BASE_URL = "https://eplacement-2.s3.ap-southeast-5.amazonaws.com/"
+VALID_STATUSES = {"present", "not_present", "manual_check"}
 
 
 def _text(value) -> str:
@@ -76,12 +77,23 @@ def _oku_status(row: pd.Series) -> str:
     return "not_present"
 
 
-def _doc_summary(label: str, doc_status: str) -> str:
-    if doc_status == "present":
+def _first_pass_status(row: pd.Series, column: str, fallback: str) -> str:
+    status = _text(row.get(column)).casefold()
+    if status in VALID_STATUSES:
+        return status
+    return fallback
+
+
+def _summary_line(label: str, status: str) -> str:
+    if status == "present":
         return f"{label} present."
-    if doc_status == "not_present":
-        return f"{label} not present."
-    return f"{label} unclear; manual check needed."
+    if status == "manual_check":
+        return f"{label} unclear."
+    return ""
+
+
+def _display_tick(status: str) -> str:
+    return "✓" if status == "present" else ""
 
 
 def build_decision_queue(merged_df: pd.DataFrame, evidence_rows: list[EvidenceResult]) -> pd.DataFrame:
@@ -94,38 +106,71 @@ def build_decision_queue(merged_df: pd.DataFrame, evidence_rows: list[EvidenceRe
             continue
         applicant_source = source_info.get(applicant_id, {"source_pdf_name": "", "original_pdf_url": ""})
 
-        marriage_doc = _doc_status(
+        marriage = _first_pass_status(
             row,
-            primary_type="marriage_certificate",
-            exact_flag="KYC_DETECTED_MARRIAGE_CERTIFICATE",
-            signal_flag="KYC_DETECTED_MARRIAGE_EVIDENCE",
+            "KYC_FIRSTPASS_MARRIAGE",
+            _doc_status(
+                row,
+                primary_type="marriage_certificate",
+                exact_flag="KYC_DETECTED_MARRIAGE_CERTIFICATE",
+                signal_flag="KYC_DETECTED_MARRIAGE_EVIDENCE",
+            ),
         )
-        medex_doc = _doc_status(
+        self_illness = _first_pass_status(row, "KYC_FIRSTPASS_SELF_ILLNESS", "not_present")
+        family_illness = _first_pass_status(row, "KYC_FIRSTPASS_FAMILY_ILLNESS", "not_present")
+        spouse_location = _first_pass_status(row, "KYC_FIRSTPASS_SPOUSE_LOCATION", "not_present")
+        oku_self_or_family = _first_pass_status(row, "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY", _oku_status(row))
+        medex_other_exam = _first_pass_status(
             row,
-            primary_type="medex_or_exam_document",
-            exact_flag="KYC_DETECTED_MEDEX_EXAM_DOCUMENT",
-            signal_flag="KYC_DETECTED_MEDEX_EVIDENCE",
+            "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM",
+            _doc_status(
+                row,
+                primary_type="medex_or_exam_document",
+                exact_flag="KYC_DETECTED_MEDEX_EXAM_DOCUMENT",
+                signal_flag="KYC_DETECTED_MEDEX_EVIDENCE",
+            ),
         )
-        oku_doc = _oku_status(row)
 
+        statuses = {
+            "marriage": marriage,
+            "self_illness": self_illness,
+            "family_illness": family_illness,
+            "spouse_location": spouse_location,
+            "oku_self_or_family": oku_self_or_family,
+            "medex_other_exam": medex_other_exam,
+        }
         summary = " | ".join(
-            [
-                _doc_summary("Marriage certificate", marriage_doc),
-                _doc_summary("MedEX/exam document", medex_doc),
-                _doc_summary("OKU evidence", oku_doc),
+            part
+            for part in [
+                _summary_line("Marriage", marriage),
+                _summary_line("Self illness", self_illness),
+                _summary_line("Family illness", family_illness),
+                _summary_line("Spouse location", spouse_location),
+                _summary_line("OKU", oku_self_or_family),
+                _summary_line("MedEX/exam", medex_other_exam),
             ]
-        )
+            if part
+        ) or "No target evidence detected."
 
         source_pdf_name = applicant_source.get("source_pdf_name", "")
         original_pdf_url = _build_original_pdf_url(applicant_source.get("original_pdf_url", ""), source_pdf_name)
-        check_required = "check" if "manual_check" in {marriage_doc, medex_doc, oku_doc} else "no_check"
+        check_required = "check" if "manual_check" in set(statuses.values()) else "no_check"
 
         rows.append(
             {
                 "applicant_id": applicant_id,
-                "marriage_doc": marriage_doc,
-                "medex_exam_doc": medex_doc,
-                "oku_doc": oku_doc,
+                "marriage": _display_tick(marriage),
+                "self_illness": _display_tick(self_illness),
+                "family_illness": _display_tick(family_illness),
+                "spouse_location": _display_tick(spouse_location),
+                "oku_self_or_family": _display_tick(oku_self_or_family),
+                "medex_other_exam": _display_tick(medex_other_exam),
+                "marriage_status": marriage,
+                "self_illness_status": self_illness,
+                "family_illness_status": family_illness,
+                "spouse_location_status": spouse_location,
+                "oku_self_or_family_status": oku_self_or_family,
+                "medex_other_exam_status": medex_other_exam,
                 "check_required": check_required,
                 "summary": summary,
                 "original_pdf_url": original_pdf_url,

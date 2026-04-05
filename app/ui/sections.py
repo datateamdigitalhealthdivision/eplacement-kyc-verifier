@@ -22,12 +22,13 @@ from src.db.models import RunJobRequest
 def _decision_column_config() -> dict:
     return {
         "applicant_id": st.column_config.TextColumn("Applicant ID"),
-        "marriage_doc": st.column_config.TextColumn("Marriage Certificate"),
-        "medex_exam_doc": st.column_config.TextColumn("MedEX / Exam"),
-        "oku_doc": st.column_config.TextColumn("OKU"),
+        "marriage": st.column_config.TextColumn("Marriage"),
+        "self_illness": st.column_config.TextColumn("Self Illness"),
+        "family_illness": st.column_config.TextColumn("Family Illness"),
+        "spouse_location": st.column_config.TextColumn("Spouse Location"),
+        "oku_self_or_family": st.column_config.TextColumn("OKU Self / Family"),
+        "medex_other_exam": st.column_config.TextColumn("MedEX / Other Exam"),
         "check_required": st.column_config.TextColumn("Check?"),
-        "summary": st.column_config.TextColumn("Summary", width="large"),
-        "original_pdf_url": st.column_config.TextColumn("Original PDF URL", width="large"),
         "open_original_pdf": st.column_config.LinkColumn("Open PDF", help="Open the original PDF URL from the uploaded spreadsheet."),
         "source_pdf_name": st.column_config.TextColumn("File Name"),
     }

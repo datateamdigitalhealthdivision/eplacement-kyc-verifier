@@ -14,6 +14,7 @@ from src.langflow_components.applicant_loader import ApplicantLoaderComponent
 from src.langflow_components.classify_component import DocClassifierComponent
 from src.langflow_components.export_component import ExportWriterComponent
 from src.langflow_components.extract_component import EvidenceExtractorComponent
+from src.langflow_components.first_pass_signals_component import FirstPassSignalsComponent
 from src.langflow_components.ocr_component import OCRRouterComponent
 from src.langflow_components.pdf_fetch_component import PDFFetchComponent
 from src.langflow_components.validate_component import RulesValidatorComponent
@@ -38,6 +39,7 @@ class LangflowFirstPassRunner:
         "Applicant Loader",
         "PDF Fetch",
         "OCR Router",
+        "Evidence Signals",
         "Doc Classifier",
         "Evidence Extractor",
         "Rules Validator",
@@ -50,6 +52,7 @@ class LangflowFirstPassRunner:
         self.loader_node = ApplicantLoaderComponent(project_root=Path(__file__).resolve().parents[2])
         self.fetch_node = PDFFetchComponent(settings)
         self.ocr_node = OCRRouterComponent(settings)
+        self.signals_node = FirstPassSignalsComponent(settings, llm_client)
         self.classify_node = DocClassifierComponent(settings, llm_client)
         self.extract_node = EvidenceExtractorComponent(settings, llm_client)
         self.validate_node = RulesValidatorComponent()
@@ -88,6 +91,7 @@ class LangflowFirstPassRunner:
             try:
                 row_targets = expected_targets(record.canonical)
                 download_url = normalize_download_url(record.canonical.get("pdf_url"))
+                context = applicant_context(record)
                 fetch_result = self.fetch_node.fetch_pdf(record.canonical, pdf_directory, request.auto_download)
                 pdf_path = Path(fetch_result["path"]) if fetch_result.get("path") else None
                 if pdf_path is not None:
@@ -113,6 +117,7 @@ class LangflowFirstPassRunner:
                     continue
 
                 ocr_document = self.ocr_node.process_document(record.applicant_id, str(pdf_path))
+                first_pass_signals = self.signals_node.scan_document(ocr_document, context)
                 engines = set(ocr_document.metadata.get("engines", []))
                 if engines == {"direct_text"}:
                     direct_text_docs += 1
@@ -132,6 +137,7 @@ class LangflowFirstPassRunner:
                         )
                         result.source_pdf_name = pdf_path.name
                         result.source_pdf_path = str(pdf_path)
+                        result.audit_payload["first_pass_signals"] = first_pass_signals.model_dump(mode="json")
                         evidence_results.append(result)
                         self.store.save_evidence_result(result)
                         counters[result.final_status] += 1
@@ -141,7 +147,6 @@ class LangflowFirstPassRunner:
 
                 classification = self.classify_node.classify_document(ocr_document)
                 detected_target = observed_target(classification)
-                context = applicant_context(record)
                 observed_evidence = self.extract_node.extract_document(ocr_document, context, detected_target)
                 observed_decision = self.validate_node.validate_document(record.canonical, ocr_document, observed_evidence, detected_target)
                 observed_result = build_result(
@@ -154,6 +159,7 @@ class LangflowFirstPassRunner:
                     ocr_document=ocr_document,
                     processing_time_seconds=perf_counter() - started,
                 )
+                observed_result.audit_payload["first_pass_signals"] = first_pass_signals.model_dump(mode="json")
                 evidence_results.append(observed_result)
                 self.store.save_evidence_result(observed_result)
                 counters[observed_result.final_status] += 1
@@ -172,6 +178,7 @@ class LangflowFirstPassRunner:
                         ocr_document=ocr_document,
                         processing_time_seconds=perf_counter() - started,
                     )
+                    mismatch_result.audit_payload["first_pass_signals"] = first_pass_signals.model_dump(mode="json")
                     evidence_results.append(mismatch_result)
                     self.store.save_evidence_result(mismatch_result)
                     counters[mismatch_result.final_status] += 1
@@ -185,6 +192,7 @@ class LangflowFirstPassRunner:
                         "pdf_path": str(pdf_path),
                         "observed_document_type": detected_target,
                         "expected_targets": row_targets,
+                        "first_pass_signals": first_pass_signals.model_dump(mode="json"),
                     },
                 )
             except Exception as exc:  # noqa: BLE001

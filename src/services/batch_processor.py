@@ -11,6 +11,7 @@ from src.classification.doc_classifier import HybridDocClassifier
 from src.db.models import ExportBundle, RunJobRequest
 from src.db.sqlite_store import SQLiteStore
 from src.extraction.evidence_models import EvidenceResult
+from src.extraction.first_pass_signals import FirstPassEvidenceScanner
 from src.extraction.generic_extractor import GenericExtractor
 from src.extraction.marriage_extractor import MarriageExtractor
 from src.extraction.medex_extractor import MedexExtractor
@@ -49,6 +50,7 @@ class BatchProcessor:
         self.marriage_extractor = MarriageExtractor(settings, llm_client)
         self.medex_extractor = MedexExtractor(settings, llm_client)
         self.generic_extractor = GenericExtractor(settings, llm_client)
+        self.first_pass_scanner = FirstPassEvidenceScanner(settings, llm_client)
         self.exporter = ExportWriter(settings)
         self.review_queue = ReviewQueueService(store)
 
@@ -78,9 +80,21 @@ class BatchProcessor:
             "applicant_id",
             "applicant_name",
             "marital_status",
+            "personal_health_condition",
+            "personal_health_details",
+            "applicant_oku_status",
             "spouse_name",
             "spouse_id",
+            "spouse_employment_status",
+            "spouse_job_title",
+            "spouse_work_address",
+            "spouse_work_state",
+            "spouse_oku_status",
+            "spouse_health_condition",
+            "spouse_health_details",
             "postgraduate_status",
+            "current_headquarters",
+            "current_placement",
             "pdf_filename",
             "pdf_url",
         ]
@@ -392,6 +406,8 @@ class BatchProcessor:
                     continue
 
                 ocr_document = self.ocr_router.process_document(record.applicant_id, pdf_path)
+                context = self._applicant_context(record)
+                first_pass_signals = self.first_pass_scanner.scan(ocr_document, applicant_context=context)
                 engines = set(ocr_document.metadata.get("engines", []))
                 if engines == {"direct_text"}:
                     direct_text_docs += 1
@@ -411,6 +427,7 @@ class BatchProcessor:
                         )
                         result.source_pdf_name = pdf_path.name
                         result.source_pdf_path = str(pdf_path)
+                        result.audit_payload["first_pass_signals"] = first_pass_signals.model_dump(mode="json")
                         evidence_results.append(result)
                         self.store.save_evidence_result(result)
                         counters[result.final_status] += 1
@@ -420,7 +437,6 @@ class BatchProcessor:
 
                 classification = self.classifier.classify(ocr_document.combined_text, ocr_document.page_image_paths)
                 observed_target = self._observed_target(classification)
-                context = self._applicant_context(record)
                 observed_evidence, observed_decision = self._extract_observed_document(
                     observed_target,
                     ocr_document,
@@ -437,6 +453,7 @@ class BatchProcessor:
                     ocr_document=ocr_document,
                     processing_time_seconds=perf_counter() - started,
                 )
+                observed_result.audit_payload["first_pass_signals"] = first_pass_signals.model_dump(mode="json")
                 evidence_results.append(observed_result)
                 self.store.save_evidence_result(observed_result)
                 counters[observed_result.final_status] += 1
@@ -455,6 +472,7 @@ class BatchProcessor:
                         ocr_document=ocr_document,
                         processing_time_seconds=perf_counter() - started,
                     )
+                    mismatch_result.audit_payload["first_pass_signals"] = first_pass_signals.model_dump(mode="json")
                     evidence_results.append(mismatch_result)
                     self.store.save_evidence_result(mismatch_result)
                     counters[mismatch_result.final_status] += 1

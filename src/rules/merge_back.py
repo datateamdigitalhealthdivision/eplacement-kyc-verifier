@@ -18,6 +18,12 @@ STATUS_ORDER = {
     "DOCUMENT_MISSING": 2,
     "": 3,
 }
+SIGNAL_ORDER = {
+    "present": 0,
+    "manual_check": 1,
+    "not_present": 2,
+    "": 3,
+}
 
 
 MANUAL_REVIEW_SOURCE_STATUSES = {
@@ -46,12 +52,40 @@ EVIDENCE_COLUMNS = {
 }
 
 
+FIRST_PASS_STATUS_COLUMNS = {
+    "marriage": "KYC_FIRSTPASS_MARRIAGE",
+    "self_illness": "KYC_FIRSTPASS_SELF_ILLNESS",
+    "family_illness": "KYC_FIRSTPASS_FAMILY_ILLNESS",
+    "spouse_location": "KYC_FIRSTPASS_SPOUSE_LOCATION",
+    "oku_self_or_family": "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY",
+    "medex_or_other_exam": "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM",
+}
+
+
+LEGACY_SIGNAL_FALLBACKS = {
+    "marriage": "marriage_evidence_detected",
+    "oku_self_or_family": "oku_evidence_detected",
+    "medex_or_other_exam": "medex_evidence_detected",
+}
+
+
 def _normalized_status(status: str) -> str:
     if status == "DOCUMENT_MISSING":
         return status
     if status in MANUAL_REVIEW_SOURCE_STATUSES:
         return "MANUAL_REVIEW_REQUIRED"
     return status
+
+
+def _normalize_signal_status(value: object) -> str:
+    normalized = str(value or "").strip().casefold()
+    if normalized in {"present", "yes", "true", "found", "detected"}:
+        return "present"
+    if normalized in {"manual_check", "manual", "unclear", "ambiguous", "uncertain", "possible", "maybe"}:
+        return "manual_check"
+    if normalized in {"not_present", "no", "false", "absent", "none", ""}:
+        return "not_present"
+    return "manual_check"
 
 
 def _effective_status(record: EvidenceResult | dict) -> str:
@@ -107,8 +141,32 @@ def _observed_tags(observed_records: list[EvidenceResult]) -> dict[str, bool]:
     return {**tags, **evidence_flags}
 
 
-def _positive_tag_list(tags: dict[str, bool]) -> list[str]:
-    return [tag for tag in [*TAG_COLUMNS.keys(), *EVIDENCE_COLUMNS.keys()] if tags.get(tag)]
+def _aggregate_first_pass_statuses(observed_records: list[EvidenceResult], tags: dict[str, bool]) -> tuple[dict[str, str], list[str]]:
+    statuses = {key: "not_present" for key in FIRST_PASS_STATUS_COLUMNS}
+    reasons: list[str] = []
+    saw_payload = False
+    for record in observed_records:
+        payload = record.audit_payload.get("first_pass_signals", {})
+        if payload:
+            saw_payload = True
+            for key in statuses:
+                incoming = _normalize_signal_status(payload.get(key))
+                if SIGNAL_ORDER[incoming] < SIGNAL_ORDER[statuses[key]]:
+                    statuses[key] = incoming
+            for reason in payload.get("reasons", []):
+                if reason and reason not in reasons:
+                    reasons.append(str(reason))
+    if not saw_payload:
+        for key, legacy_flag in LEGACY_SIGNAL_FALLBACKS.items():
+            if tags.get(legacy_flag, False):
+                statuses[key] = "present"
+    return statuses, reasons
+
+
+def _positive_tag_list(tags: dict[str, bool], first_pass_statuses: dict[str, str]) -> list[str]:
+    values = [tag for tag in [*TAG_COLUMNS.keys(), *EVIDENCE_COLUMNS.keys()] if tags.get(tag)]
+    values.extend(f"{key}:{status}" for key, status in first_pass_statuses.items() if status != "not_present")
+    return values
 
 
 def merge_results_back(source_df: pd.DataFrame, canonical_df: pd.DataFrame, evidence_results: list[EvidenceResult]) -> pd.DataFrame:
@@ -149,6 +207,8 @@ def merge_results_back(source_df: pd.DataFrame, canonical_df: pd.DataFrame, evid
         kyc_columns[column] = []
     for column in EVIDENCE_COLUMNS.values():
         kyc_columns[column] = []
+    for column in FIRST_PASS_STATUS_COLUMNS.values():
+        kyc_columns[column] = []
 
     for _, canonical_row in canonical_df.iterrows():
         applicant_id = str(canonical_row.get("applicant_id", ""))
@@ -166,7 +226,22 @@ def merge_results_back(source_df: pd.DataFrame, canonical_df: pd.DataFrame, evid
         medex_status, medex_reason, medex_review = _aggregate(medex_records)
         has_document = _document_present(records, observed_records)
         tags = _observed_tags(observed_records)
-        positive_tags = _positive_tag_list(tags)
+        first_pass_statuses, first_pass_reasons = _aggregate_first_pass_statuses(observed_records, tags)
+
+        if first_pass_statuses["marriage"] != "not_present":
+            tags["marriage_related_document"] = True
+            tags["marriage_evidence_detected"] = True
+        if first_pass_statuses["medex_or_other_exam"] != "not_present":
+            tags["medex_exam_document"] = True
+            tags["medical_document"] = True
+            tags["medex_evidence_detected"] = True
+        if first_pass_statuses["oku_self_or_family"] != "not_present":
+            tags["oku_document"] = True
+            tags["oku_evidence_detected"] = True
+        if first_pass_statuses["self_illness"] != "not_present" or first_pass_statuses["family_illness"] != "not_present":
+            tags["medical_document"] = True
+
+        positive_tags = _positive_tag_list(tags, first_pass_statuses)
 
         married_claim = row_claim_is_married(canonical_row.get("marital_status"))
         medex_claim = row_has_postgraduate_claim(canonical_row.get("postgraduate_status"))
@@ -229,7 +304,7 @@ def merge_results_back(source_df: pd.DataFrame, canonical_df: pd.DataFrame, evid
             medex_reason = medex_reason or "MedEX or exam evidence was detected even though the spreadsheet does not claim it."
             medex_review = True
 
-        overall_reasons = [reason for reason in [uploaded_reason, marriage_reason, medex_reason, oku_reason] if reason]
+        overall_reasons = [reason for reason in [uploaded_reason, marriage_reason, medex_reason, oku_reason, *first_pass_reasons] if reason]
         overall_review = uploaded_review or marriage_review or medex_review or oku_review
         if not has_document and (married_claim or medex_claim or oku_claim):
             overall_status = "DOCUMENT_MISSING"
@@ -268,6 +343,8 @@ def merge_results_back(source_df: pd.DataFrame, canonical_df: pd.DataFrame, evid
             kyc_columns[column].append(bool(tags.get(tag, False)))
         for flag, column in EVIDENCE_COLUMNS.items():
             kyc_columns[column].append(bool(tags.get(flag, False)))
+        for key, column in FIRST_PASS_STATUS_COLUMNS.items():
+            kyc_columns[column].append(first_pass_statuses[key])
 
     for column, values in kyc_columns.items():
         merged[column] = values

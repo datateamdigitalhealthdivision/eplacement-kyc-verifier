@@ -62,3 +62,73 @@ def extraction_prompt(
         f"[Page N] markers when possible. OCR text may be partial or noisy. Applicant row context: {context}.\n\n"
         f"OCR_TEXT:\n{text[:16000]}"
     )
+
+
+def first_pass_signals_prompt(
+    text: str,
+    applicant_context: dict[str, str] | None = None,
+    include_images: bool = False,
+    page_range: str | None = None,
+) -> str:
+    vision_hint = (
+        "You are also given page images from a PDF bundle. A single PDF may contain multiple different documents. "
+        "Use what you can see in the images together with any OCR text.\n"
+        if include_images
+        else ""
+    )
+    page_hint = f"The supplied content is from pages {page_range}.\n" if page_range else ""
+    context_payload = {
+        key: value
+        for key, value in (applicant_context or {}).items()
+        if key
+        in {
+            "applicant_id",
+            "applicant_name",
+            "personal_health_condition",
+            "personal_health_details",
+            "applicant_oku_status",
+            "spouse_name",
+            "spouse_id",
+            "spouse_employment_status",
+            "spouse_job_title",
+            "spouse_work_address",
+            "spouse_work_state",
+            "spouse_oku_status",
+            "spouse_health_condition",
+            "spouse_health_details",
+            "postgraduate_status",
+            "current_headquarters",
+            "current_placement",
+        }
+        and str(value or "").strip()
+    }
+    context_hint = (
+        "Spreadsheet context for relationship disambiguation only. Use it only to decide who the document is about. "
+        "Do not invent evidence that is not visible in the document.\n"
+        f"APPLICANT_CONTEXT: {json.dumps(context_payload, ensure_ascii=True)}\n"
+        if context_payload
+        else ""
+    )
+    return (
+        "You are doing a first-pass evidence scan for KYC review.\n"
+        f"{vision_hint}"
+        f"{page_hint}"
+        f"{context_hint}"
+        "Do not force the whole PDF into one main document type. Instead, decide whether each evidence bucket is present, not_present, or manual_check based on anything visible in the supplied pages.\n"
+        "Use present when the evidence is clearly visible. Use not_present when there is no sign of it. Use manual_check only when there is a possible signal but it is too ambiguous to call present.\n"
+        "Use manual_check sparingly. If the page is generic, weak, or not clearly about the target evidence, prefer not_present.\n"
+        "Evidence buckets:\n"
+        "- marriage: actual marriage certificate or clear marriage evidence such as surat perakuan nikah or sijil nikah.\n"
+        "- self_illness: evidence the applicant has illness, treatment, follow-up care, diagnosis, admission, medication, or ongoing medical issues. Use applicant context to decide whether the medical subject is the applicant. Do not mark self_illness just because a family member has a medical document.\n"
+        "- family_illness: evidence that a spouse, child, parent, or other family member has illness, treatment, follow-up care, diagnosis, admission, medication, or ongoing medical issues. If a medical document is clearly about someone other than the applicant, prefer family_illness over self_illness.\n"
+        "- spouse_location: evidence of spouse working location or placement. This includes appointment letters, placement letters, posting letters, transfer letters, report-to-duty letters, office assignment letters, or clear place-of-work or location evidence for the spouse. Use spouse name, spouse ID, spouse job title, or spouse workplace context when visible. If the letter is clearly for someone other than the applicant and that person matches the spouse context, mark spouse_location present.\n"
+        "- oku_self_or_family: evidence of official OKU or disability registration, approval, card, or status for the applicant or a family member. Do not use this just because there is illness.\n"
+        "- medex_or_other_exam: only official MedEX, GCFM, exam attendance, exam result, exam certificate, or postgraduate or entrance examination evidence. Do not count ordinary clinic visits, hospital notes, routine physical examination sheets, treatment summaries, therapy notes, medical memos, discharge letters, or general medical reports as medex_or_other_exam. The word peperiksaan or examination by itself is not enough.\n"
+        "Relationship rules:\n"
+        "- If the bundle clearly shows both applicant illness and family illness on different pages, both can be present.\n"
+        "- If the medical pages point to only one person and that person is the spouse or family member, do not also mark self_illness.\n"
+        "- If marriage evidence exists elsewhere in the bundle, that can help confirm spouse context for spouse_location, but it is not required.\n"
+        "Return JSON only with keys marriage, self_illness, family_illness, spouse_location, oku_self_or_family, medex_or_other_exam, reasons.\n\n"
+        "OCR_TEXT:\n"
+        f"{text[:12000]}"
+    )

@@ -57,3 +57,13 @@ class GenericExtractionSchema(BaseModel):
     key_supporting_snippets: list[str] = Field(default_factory=list)
     page_refs: list[int] = Field(default_factory=list)
     extraction_confidence: float = 0.0
+
+
+class FirstPassSignalsSchema(BaseModel):
+    marriage: Literal["present", "not_present", "manual_check"] = "not_present"
+    self_illness: Literal["present", "not_present", "manual_check"] = "not_present"
+    family_illness: Literal["present", "not_present", "manual_check"] = "not_present"
+    spouse_location: Literal["present", "not_present", "manual_check"] = "not_present"
+    oku_self_or_family: Literal["present", "not_present", "manual_check"] = "not_present"
+    medex_or_other_exam: Literal["present", "not_present", "manual_check"] = "not_present"
+    reasons: list[str] = Field(default_factory=list)

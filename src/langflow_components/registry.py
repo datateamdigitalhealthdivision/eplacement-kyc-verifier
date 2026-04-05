@@ -23,6 +23,12 @@ COMPONENT_CATALOG: list[dict[str, str]] = [
         "purpose": "Builds the OCR document object, including page images for vision models.",
     },
     {
+        "display_name": "Evidence Signals",
+        "class_name": "FirstPassSignalsComponent",
+        "module_path": "src.langflow_components.first_pass_signals_component",
+        "purpose": "Scans the full PDF bundle for broad first-pass evidence categories.",
+    },
+    {
         "display_name": "Doc Classifier",
         "class_name": "DocClassifierComponent",
         "module_path": "src.langflow_components.classify_component",
