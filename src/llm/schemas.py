@@ -66,4 +66,15 @@ class FirstPassSignalsSchema(BaseModel):
     spouse_location: Literal["present", "not_present", "manual_check"] = "not_present"
     oku_self_or_family: Literal["present", "not_present", "manual_check"] = "not_present"
     medex_or_other_exam: Literal["present", "not_present", "manual_check"] = "not_present"
+    best_fit_bucket: Literal[
+        "marriage",
+        "self_illness",
+        "family_illness",
+        "spouse_location",
+        "oku_self_or_family",
+        "medex_or_other_exam",
+    ] | None = None
+    best_fit_confidence: float = 0.0
+    subject_role: Literal["applicant", "spouse", "family", "other_person", "unknown"] = "unknown"
+    subject_role_confidence: float = 0.0
     reasons: list[str] = Field(default_factory=list)

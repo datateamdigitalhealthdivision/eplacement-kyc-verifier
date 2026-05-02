@@ -105,6 +105,30 @@ columns:
       - keterangan masalah kesihatan pasanga
       - spouse_health_details
       - spouse health details
+  children_health_issue_score:
+    required: false
+    aliases:
+      - CHILDREN_HEALTH_ISSUE_SCORE
+      - children_health_issue_score
+      - children health issue score
+  parent_health_issue_score:
+    required: false
+    aliases:
+      - PARENT_HEALTH_ISSUE_SCORE
+      - parent_health_issue_score
+      - parent health issue score
+  children_disability_score:
+    required: false
+    aliases:
+      - CHILDREN_DISABILITY_SCORE
+      - children_disability_score
+      - children disability score
+  parent_disability_score:
+    required: false
+    aliases:
+      - PARENT_DISABILITY_SCORE
+      - parent_disability_score
+      - parent disability score
   email:
     required: false
     aliases:
@@ -137,6 +161,8 @@ columns:
   pdf_url:
     required: false
     aliases:
+      - ATTACHMENT
+      - attachment
       - Sheet1.DownloadURL
       - DownloadURL
       - pdf_url

@@ -69,6 +69,7 @@ def first_pass_signals_prompt(
     applicant_context: dict[str, str] | None = None,
     include_images: bool = False,
     page_range: str | None = None,
+    focus_signal: str | None = None,
 ) -> str:
     vision_hint = (
         "You are also given page images from a PDF bundle. A single PDF may contain multiple different documents. "
@@ -96,6 +97,10 @@ def first_pass_signals_prompt(
             "spouse_oku_status",
             "spouse_health_condition",
             "spouse_health_details",
+            "children_health_issue_score",
+            "parent_health_issue_score",
+            "children_disability_score",
+            "parent_disability_score",
             "postgraduate_status",
             "current_headquarters",
             "current_placement",
@@ -109,14 +114,29 @@ def first_pass_signals_prompt(
         if context_payload
         else ""
     )
+    focus_hint = (
+        f"Second-pass recovery mode: focus especially on whether the supplied pages support {focus_signal}. "
+        "Assume the applicant may have uploaded the correct supporting pages even if OCR is weak. "
+        "If the layout, header, form fields, seal, stamps, repeated keywords, or relationship context plausibly match this signal, "
+        "prefer manual_check or present over not_present for that signal. "
+        "Still return all six evidence buckets and still choose exactly one best_fit_bucket.\n"
+        if focus_signal
+        else ""
+    )
     return (
         "You are doing a first-pass evidence scan for KYC review.\n"
         f"{vision_hint}"
         f"{page_hint}"
         f"{context_hint}"
+        f"{focus_hint}"
         "Do not force the whole PDF into one main document type. Instead, decide whether each evidence bucket is present, not_present, or manual_check based on anything visible in the supplied pages.\n"
         "Use present when the evidence is clearly visible. Use not_present when there is no sign of it. Use manual_check only when there is a possible signal but it is too ambiguous to call present.\n"
         "Use manual_check sparingly. If the page is generic, weak, or not clearly about the target evidence, prefer not_present.\n"
+        "Even if all six buckets look weak or not_present, you must still choose exactly one best_fit_bucket from the six evidence buckets below. Do not use unknown or none. best_fit_bucket is your forced best guess for what these pages most likely support.\n"
+        "best_fit_confidence must be a numeric value between 0 and 1. Use a higher value when the page layout, title, seal, form structure, or repeated weak cues point to that bucket even if the OCR is poor.\n"
+        "Also decide who the visible page is mainly about. subject_role must be exactly one of applicant, spouse, family, other_person, unknown. "
+        "Use applicant when the page is mainly about the applicant. Use spouse when it is mainly about the spouse. Use family when it is clearly a family member but not specifically the spouse. "
+        "Use other_person when the page appears to belong to somebody else entirely. Use unknown when you cannot tell.\n"
         "Evidence buckets:\n"
         "- marriage: actual marriage certificate or clear marriage evidence such as surat perakuan nikah or sijil nikah.\n"
         "- self_illness: evidence the applicant has illness, treatment, follow-up care, diagnosis, admission, medication, or ongoing medical issues. Use applicant context to decide whether the medical subject is the applicant. Do not mark self_illness just because a family member has a medical document.\n"
@@ -128,7 +148,7 @@ def first_pass_signals_prompt(
         "- If the bundle clearly shows both applicant illness and family illness on different pages, both can be present.\n"
         "- If the medical pages point to only one person and that person is the spouse or family member, do not also mark self_illness.\n"
         "- If marriage evidence exists elsewhere in the bundle, that can help confirm spouse context for spouse_location, but it is not required.\n"
-        "Return JSON only with keys marriage, self_illness, family_illness, spouse_location, oku_self_or_family, medex_or_other_exam, reasons.\n\n"
+        "Return JSON only with keys marriage, self_illness, family_illness, spouse_location, oku_self_or_family, medex_or_other_exam, best_fit_bucket, best_fit_confidence, subject_role, subject_role_confidence, reasons.\n\n"
         "OCR_TEXT:\n"
         f"{text[:12000]}"
     )

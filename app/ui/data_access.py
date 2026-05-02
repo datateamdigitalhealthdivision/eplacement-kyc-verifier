@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from app.bootstrap import SERVICE, SETTINGS, SUPPORTED_SPREADSHEET_SUFFIXES
+from src.reports.decision_queue import build_decision_queue
+from src.reports.scoring_sheet import build_scoring_sheet, write_scoring_sheet_xlsx
 
 
 TICK_COLUMNS = [
@@ -84,9 +86,30 @@ def latest_bundle(job_id: str | None = None):
     return SERVICE.latest_exports(job_id)
 
 
+def _refresh_bundle_exports(bundle: Any) -> None:
+    if bundle is None or not getattr(bundle, "merged_csv", None):
+        return
+    merged_path = Path(bundle.merged_csv)
+    if not merged_path.exists():
+        return
+    merged_df = pd.read_csv(merged_path, dtype=str, keep_default_na=False)
+    decision_df = build_decision_queue(merged_df, [])
+    if bundle.decision_csv:
+        Path(bundle.decision_csv).parent.mkdir(parents=True, exist_ok=True)
+        decision_df.to_csv(bundle.decision_csv, index=False)
+    if bundle.decision_xlsx:
+        decision_df.to_excel(bundle.decision_xlsx, index=False)
+    scoring_df = build_scoring_sheet(decision_df, SETTINGS, bundle.job_id)
+    if bundle.scoring_csv:
+        scoring_df.to_csv(bundle.scoring_csv, index=False)
+    if bundle.scoring_xlsx:
+        write_scoring_sheet_xlsx(scoring_df, bundle.scoring_xlsx)
+
+
 def decision_dataframe(bundle: Any) -> pd.DataFrame | None:
     if bundle is None or not bundle.decision_csv:
         return None
+    _refresh_bundle_exports(bundle)
     path = Path(bundle.decision_csv)
     if not path.exists():
         return None

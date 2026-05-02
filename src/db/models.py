@@ -63,6 +63,8 @@ class ExportBundle(BaseModel):
     summary_json: str
     decision_csv: str | None = None
     decision_xlsx: str | None = None
+    scoring_csv: str | None = None
+    scoring_xlsx: str | None = None
 
 
 class RunJobRequest(BaseModel):

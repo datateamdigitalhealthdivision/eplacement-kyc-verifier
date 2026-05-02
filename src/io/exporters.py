@@ -10,6 +10,7 @@ import pandas as pd
 from src.db.models import ExportBundle
 from src.extraction.evidence_models import EvidenceResult
 from src.reports.decision_queue import build_decision_queue
+from src.reports.scoring_sheet import build_scoring_sheet, write_scoring_sheet_xlsx
 from src.settings import AppConfig
 
 
@@ -46,8 +47,11 @@ class ExportWriter:
         review_xlsx = review_dir / f"review_queue_{job_id}.xlsx"
         decision_csv = review_dir / f"decision_queue_{job_id}.csv"
         decision_xlsx = review_dir / f"decision_queue_{job_id}.xlsx"
+        scoring_csv = review_dir / f"scoring_sheet_{job_id}.csv"
+        scoring_xlsx = review_dir / f"scoring_sheet_{job_id}.xlsx"
         summary_csv = reports_dir / f"summary_{job_id}.csv"
         summary_json = reports_dir / f"summary_{job_id}.json"
+        scoring_df = build_scoring_sheet(decision_df, self.settings, job_id)
 
         validation_df.to_csv(validation_csv, index=False)
         validation_df.to_excel(validation_xlsx, index=False)
@@ -57,6 +61,8 @@ class ExportWriter:
         review_df.to_excel(review_xlsx, index=False)
         decision_df.to_csv(decision_csv, index=False)
         decision_df.to_excel(decision_xlsx, index=False)
+        scoring_df.to_csv(scoring_csv, index=False)
+        write_scoring_sheet_xlsx(scoring_df, scoring_xlsx)
         summary_df.to_csv(summary_csv, index=False)
         summary_json.write_text(json.dumps(summary, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
@@ -72,6 +78,8 @@ class ExportWriter:
             summary_json=str(summary_json),
             decision_csv=str(decision_csv),
             decision_xlsx=str(decision_xlsx),
+            scoring_csv=str(scoring_csv),
+            scoring_xlsx=str(scoring_xlsx),
         )
 
     def write(

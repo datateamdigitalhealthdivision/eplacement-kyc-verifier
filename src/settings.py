@@ -40,6 +40,7 @@ class OllamaSection(BaseModel):
     host: str = "http://localhost:11434"
     model: str = "qwen2.5:7b-instruct"
     image_model: str = "qwen2.5vl:7b"
+    secondary_image_model: str | None = "gemma3:12b"
     vision_enabled: bool = True
     vision_max_images: int = 3
     timeout_seconds: int = 120
@@ -127,6 +128,8 @@ def _merge_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         config.setdefault("ollama", {})["model"] = model
     if image_model := os.getenv("EPKYC_OLLAMA_IMAGE_MODEL"):
         config.setdefault("ollama", {})["image_model"] = image_model
+    if secondary_image_model := os.getenv("EPKYC_OLLAMA_SECONDARY_IMAGE_MODEL"):
+        config.setdefault("ollama", {})["secondary_image_model"] = secondary_image_model
     if vision_enabled := os.getenv("EPKYC_OLLAMA_VISION_ENABLED"):
         config.setdefault("ollama", {})["vision_enabled"] = vision_enabled.casefold() in {"1", "true", "yes", "on"}
     if vision_max_images := os.getenv("EPKYC_OLLAMA_VISION_MAX_IMAGES"):

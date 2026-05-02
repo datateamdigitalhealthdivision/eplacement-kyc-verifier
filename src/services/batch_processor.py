@@ -28,6 +28,7 @@ from src.rules.merge_back import merge_results_back
 from src.rules.validators import aggregate_reason_text, document_ocr_confidence, generic_document_decision, row_claim_is_married, row_has_postgraduate_claim
 from src.services.review_queue import ReviewQueueService
 from src.settings import AppConfig
+from src.utils.download_url import normalize_download_url
 
 
 SUPPORTED_TARGETS = {"marriage_certificate", "medex_or_exam_document"}
@@ -62,17 +63,6 @@ class BatchProcessor:
         if row_has_postgraduate_claim(row.get("postgraduate_status")):
             targets.append("medex_or_exam_document")
         return targets
-
-    @staticmethod
-    def _normalize_download_url(value: str | None) -> str | None:
-        normalized = str(value or "").strip()
-        if not normalized:
-            return None
-        if normalized.casefold() in {"tiada maklumat", "nan", "none", "null", "n/a", "na", "-"}:
-            return None
-        if normalized.lower().startswith(("http://", "https://")):
-            return normalized
-        return None
 
     @staticmethod
     def _applicant_context(record: ApplicantRecord) -> dict[str, str]:
@@ -212,7 +202,7 @@ class BatchProcessor:
             row_index=record.row_index,
             source_pdf_name=pdf_path.name,
             source_pdf_path=str(pdf_path),
-            download_url=self._normalize_download_url(record.canonical.get("pdf_url")),
+            download_url=normalize_download_url(record.canonical.get("pdf_url")),
             document_type=evidence.doc_type,
             evidence_type=decision.evidence_type,
             ocr_engine=",".join(ocr_document.metadata.get("engines", [])),
@@ -272,7 +262,7 @@ class BatchProcessor:
             row_index=record.row_index,
             source_pdf_name=pdf_path.name,
             source_pdf_path=str(pdf_path),
-            download_url=self._normalize_download_url(record.canonical.get("pdf_url")),
+            download_url=normalize_download_url(record.canonical.get("pdf_url")),
             document_type=expected_target,
             evidence_type=self._evidence_type(expected_target),
             ocr_engine=",".join(ocr_document.metadata.get("engines", [])),
@@ -372,7 +362,7 @@ class BatchProcessor:
                 pdf_path = located.path
                 download_status = None
                 download_error = None
-                download_url = self._normalize_download_url(record.canonical.get("pdf_url"))
+                download_url = normalize_download_url(record.canonical.get("pdf_url"))
                 if pdf_path is None and request.auto_download and download_url:
                     download_result = self.downloader.download(
                         download_url,
@@ -495,7 +485,7 @@ class BatchProcessor:
                     "other_supporting_document",
                     "OCR_FAILED",
                     str(exc),
-                    self._normalize_download_url(record.canonical.get("pdf_url")),
+                    normalize_download_url(record.canonical.get("pdf_url")),
                 )
                 evidence_results.append(result)
                 self.store.save_evidence_result(result)

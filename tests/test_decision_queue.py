@@ -121,5 +121,80 @@ def test_decision_queue_uses_manual_check_only_for_ambiguous_signal() -> None:
 
     assert decision_df.loc[0, "self_illness"] == ""
     assert decision_df.loc[0, "self_illness_status"] == "manual_check"
-    assert decision_df.loc[0, "check_required"] == "check"
+    assert decision_df.loc[0, "check_required"] == "no_check"
     assert decision_df.loc[0, "original_pdf_url"] == "https://eplacement-2.s3.ap-southeast-5.amazonaws.com/960102135327.pdf"
+
+
+def test_decision_queue_checks_when_claimed_signals_remain_missing_after_second_pass() -> None:
+    merged = pd.DataFrame(
+        [
+            {
+                "KYC_APPLICANT_ID_NORMALIZED": "960831106534",
+                "MARITAL_STATUS": "BERKAHWIN",
+                "POSTGRADUATE_PAPER_STATUS": "Peperiksaan Kemasukan/MedEX/GCFM",
+                "Alamat Bekerja Pasangan": "Cyberjaya",
+                "KYC_FIRSTPASS_MARRIAGE": "not_present",
+                "KYC_FIRSTPASS_SELF_ILLNESS": "not_present",
+                "KYC_FIRSTPASS_FAMILY_ILLNESS": "not_present",
+                "KYC_FIRSTPASS_SPOUSE_LOCATION": "not_present",
+                "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY": "not_present",
+                "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM": "not_present",
+                "ATTACHMENT": "https://d3j85m1nd79zoa.cloudfront.net/960831106534.pdf",
+            }
+        ]
+    )
+
+    decision_df = build_decision_queue(merged, [])
+
+    assert decision_df.loc[0, "check_required"] == "check"
+    assert decision_df.loc[0, "original_pdf_url"] == "https://d3j85m1nd79zoa.cloudfront.net/960831106534.pdf"
+
+
+def test_decision_queue_keeps_no_check_for_blank_non_claim_row() -> None:
+    merged = pd.DataFrame(
+        [
+            {
+                "KYC_APPLICANT_ID_NORMALIZED": "950331075322",
+                "MARITAL_STATUS": "BUJANG",
+                "POSTGRADUATE_PAPER_STATUS": "Tidak Berkenaan",
+                "PERSONAL_HEALTH_CONDITION": "Tiada",
+                "StatusOKU": "Tiada",
+                "KYC_FIRSTPASS_MARRIAGE": "not_present",
+                "KYC_FIRSTPASS_SELF_ILLNESS": "not_present",
+                "KYC_FIRSTPASS_FAMILY_ILLNESS": "not_present",
+                "KYC_FIRSTPASS_SPOUSE_LOCATION": "not_present",
+                "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY": "not_present",
+                "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM": "not_present",
+            }
+        ]
+    )
+
+    decision_df = build_decision_queue(merged, [])
+
+    assert decision_df.loc[0, "check_required"] == "no_check"
+    assert decision_df.loc[0, "summary"] == "No target evidence detected."
+
+
+def test_decision_queue_checks_gross_partial_mismatch() -> None:
+    merged = pd.DataFrame(
+        [
+            {
+                "KYC_APPLICANT_ID_NORMALIZED": "950213146361",
+                "MARITAL_STATUS": "BERKAHWIN",
+                "POSTGRADUATE_PAPER_STATUS": "Peperiksaan Kemasukan/MedEX/GCFM",
+                "Alamat Bekerja Pasangan": "Kota Kinabalu",
+                "KYC_FIRSTPASS_MARRIAGE": "present",
+                "KYC_FIRSTPASS_SELF_ILLNESS": "not_present",
+                "KYC_FIRSTPASS_FAMILY_ILLNESS": "not_present",
+                "KYC_FIRSTPASS_SPOUSE_LOCATION": "present",
+                "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY": "not_present",
+                "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM": "not_present",
+                "ATTACHMENT": "https://d3j85m1nd79zoa.cloudfront.net/950213146361.pdf",
+            }
+        ]
+    )
+
+    decision_df = build_decision_queue(merged, [])
+
+    assert decision_df.loc[0, "check_required"] == "check"
+    assert "Detected marriage, spouse location, but missing claimed MedEX/other exam." in decision_df.loc[0, "summary"]

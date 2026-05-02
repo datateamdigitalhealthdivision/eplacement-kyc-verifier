@@ -23,6 +23,7 @@ ollama:
   host: http://localhost:11434
   model: qwen2.5:7b-instruct
   image_model: qwen2.5vl:7b
+  secondary_image_model: gemma3:12b
   vision_enabled: true
   vision_max_images: 3
   timeout_seconds: 120

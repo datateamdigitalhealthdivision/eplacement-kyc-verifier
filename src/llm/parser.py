@@ -18,6 +18,32 @@ FIRST_PASS_STATUS_KEYS = {
     "oku_self_or_family",
     "medex_or_other_exam",
 }
+FIRST_PASS_BUCKET_ALIASES = {
+    "marriage": "marriage",
+    "marriage certificate": "marriage",
+    "self illness": "self_illness",
+    "family illness": "family_illness",
+    "spouse location": "spouse_location",
+    "oku self or family": "oku_self_or_family",
+    "oku": "oku_self_or_family",
+    "medex or other exam": "medex_or_other_exam",
+    "medex": "medex_or_other_exam",
+    "exam": "medex_or_other_exam",
+}
+SUBJECT_ROLE_ALIASES = {
+    "applicant": "applicant",
+    "self": "applicant",
+    "candidate": "applicant",
+    "spouse": "spouse",
+    "husband": "spouse",
+    "wife": "spouse",
+    "family": "family",
+    "parent": "family",
+    "child": "family",
+    "other person": "other_person",
+    "other_person": "other_person",
+    "unknown": "unknown",
+}
 
 
 def extract_json_fragment(text: str) -> str:
@@ -98,12 +124,32 @@ def _coerce_presence_status(value: Any) -> str:
     return "manual_check"
 
 
+def _coerce_first_pass_bucket(value: Any) -> str | None:
+    normalized = str(value or "").strip().casefold().replace("-", "_")
+    if not normalized:
+        return None
+    normalized = re.sub(r"\s+", " ", normalized.replace("_", " ")).strip()
+    return FIRST_PASS_BUCKET_ALIASES.get(normalized)
+
+
+def _coerce_subject_role(value: Any) -> str:
+    normalized = str(value or "").strip().casefold().replace("-", "_")
+    if not normalized:
+        return "unknown"
+    normalized = re.sub(r"\s+", " ", normalized.replace("_", " ")).strip()
+    return SUBJECT_ROLE_ALIASES.get(normalized, "unknown")
+
+
 def _normalize_payload(payload: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = dict(payload)
     if "confidence" in normalized:
         normalized["confidence"] = _coerce_confidence(normalized.get("confidence"))
     if "extraction_confidence" in normalized:
         normalized["extraction_confidence"] = _coerce_confidence(normalized.get("extraction_confidence"))
+    if "best_fit_confidence" in normalized:
+        normalized["best_fit_confidence"] = _coerce_confidence(normalized.get("best_fit_confidence"))
+    if "subject_role_confidence" in normalized:
+        normalized["subject_role_confidence"] = _coerce_confidence(normalized.get("subject_role_confidence"))
     if "page_refs" in normalized:
         normalized["page_refs"] = _coerce_page_refs(normalized.get("page_refs"))
     if "reasons" in normalized:
@@ -113,6 +159,12 @@ def _normalize_payload(payload: dict[str, Any], overrides: dict[str, Any] | None
     for key, value in list(normalized.items()):
         if key in FIRST_PASS_STATUS_KEYS:
             normalized[key] = _coerce_presence_status(value)
+            continue
+        if key == "best_fit_bucket":
+            normalized[key] = _coerce_first_pass_bucket(value)
+            continue
+        if key == "subject_role":
+            normalized[key] = _coerce_subject_role(value)
             continue
         if isinstance(value, str):
             stripped = value.strip()

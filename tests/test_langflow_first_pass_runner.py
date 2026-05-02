@@ -42,8 +42,9 @@ def test_langflow_first_pass_runner_smoke_run(tmp_path: Path) -> None:
 
     assert exports is not None
     validation_df = pd.read_csv(exports.validation_csv)
+    assert len(validation_df) == 1
     assert "CONFIRMED" in set(validation_df["final_status"])
     merged_df = pd.read_csv(exports.merged_csv)
-    assert merged_df.loc[0, "KYC_UPLOADED_DOC_TYPE"] == "marriage_certificate"
+    assert merged_df.loc[0, "KYC_UPLOADED_DOC_TYPE"] == "marriage"
     assert merged_df.loc[0, "KYC_UPLOADED_DOC_STATUS"] == "CONFIRMED"
     assert merged_df.loc[0, "KYC_MARRIAGE_STATUS"] == "CONFIRMED"

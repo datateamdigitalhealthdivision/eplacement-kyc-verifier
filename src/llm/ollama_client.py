@@ -29,6 +29,10 @@ class OllamaClient:
     def vision_model_name(self) -> str:
         return self.settings.ollama.image_model
 
+    def secondary_vision_model_name(self) -> str | None:
+        model_name = self.settings.ollama.secondary_image_model
+        return model_name or None
+
     @staticmethod
     def cache_slug(model_name: str) -> str:
         return re.sub(r"[^a-z0-9]+", "_", model_name.casefold()).strip("_") or "default"

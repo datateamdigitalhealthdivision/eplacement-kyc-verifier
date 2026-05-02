@@ -39,6 +39,17 @@ class ReviewQueueService:
             observed = str(decision.get("observed_document_type") or "") or None
             category = "wrong_document_type_uploaded"
             triage_note = f"Observed {cls._doc_type_label(observed)}; expected {cls._doc_type_label(expected)}."
+        elif result_kind == "candidate_assessment":
+            missing = audit.get("missing_claims", [])
+            ambiguous = audit.get("ambiguous_claims", [])
+            observed = str(audit.get("detected_primary_signal") or record.document_type or "") or None
+            category = "claimed_evidence_still_missing"
+            pieces: list[str] = []
+            if missing:
+                pieces.append("Missing claimed " + ", ".join(str(item).replace("_", " ") for item in missing))
+            if ambiguous:
+                pieces.append("Ambiguous claimed " + ", ".join(str(item).replace("_", " ") for item in ambiguous))
+            triage_note = ". ".join(pieces) + "." if pieces else "Applicant needs manual review after the second pass."
         elif result_kind == "missing_document":
             expected = record.document_type or None
             category = "missing_document"

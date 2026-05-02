@@ -11,10 +11,11 @@ from src.llm.ollama_client import OllamaClient
 from src.llm.parser import parse_model_response
 from src.llm.prompts import first_pass_signals_prompt
 from src.llm.schemas import FirstPassSignalsSchema
+from src.rules.validators import row_claim_is_married, row_has_oku_claim, row_has_postgraduate_claim
 from src.settings import AppConfig
 
 
-CACHE_VERSION = "v5"
+CACHE_VERSION = "v8"
 STATUS_PRIORITY = {"not_present": 0, "manual_check": 1, "present": 2}
 SIGNAL_KEYS = [
     "marriage",
@@ -113,12 +114,23 @@ EXAM_NEGATIVE_PATTERNS = [
     r"TREATMENT",
     r"DISCHARGE",
 ]
+FORCED_GUESS_PRESENT_THRESHOLD = 0.7
+FORCED_GUESS_MANUAL_THRESHOLD = 0.45
+DOCUMENT_GUESS_PRESENT_THRESHOLD = 0.6
+TARGETED_PRESENT_THRESHOLD = 0.55
+TARGETED_MANUAL_THRESHOLD = 0.35
+NEGATIVE_TEXT_VALUES = {"", "0", "tiada", "tidak", "tidak berkenaan", "none", "n/a", "na", "null"}
 
 
 class FirstPassEvidenceScanner:
     def __init__(self, settings: AppConfig, llm_client: OllamaClient | None = None) -> None:
         self.settings = settings
         self.llm_client = llm_client
+
+    def _secondary_model_name(self) -> str | None:
+        if not self.llm_client or not hasattr(self.llm_client, "secondary_vision_model_name"):
+            return None
+        return self.llm_client.secondary_vision_model_name()
 
     def _cache_path(self, processing_hash: str, mode: str, model_name: str | None = None) -> Path:
         suffix = f"_{OllamaClient.cache_slug(model_name)}" if model_name else ""
@@ -131,7 +143,10 @@ class FirstPassEvidenceScanner:
     def _desired_mode(self, document: OCRDocument) -> tuple[str, str | None]:
         image_paths = self._document_images(document)
         if self.llm_client and self.llm_client.is_vision_enabled() and image_paths:
-            return "ollama_vision", self.llm_client.vision_model_name()
+            model_names = [self.llm_client.vision_model_name()]
+            if self._secondary_model_name():
+                model_names.append(self._secondary_model_name())
+            return "ollama_vision", "+".join(model_names)
         if self.llm_client and self.llm_client.is_enabled() and document.combined_text:
             return "ollama_text", self.llm_client.text_model_name()
         return "heuristic", None
@@ -175,7 +190,7 @@ class FirstPassEvidenceScanner:
             manual_count = sum(1 for result in chunk_results if getattr(result, key) == "manual_check")
             if present_count >= 1:
                 payload[key] = "present"
-            elif manual_count >= 2:
+            elif manual_count >= 1:
                 payload[key] = "manual_check"
             else:
                 payload[key] = "not_present"
@@ -190,6 +205,192 @@ class FirstPassEvidenceScanner:
         for key in SIGNAL_KEYS:
             if payload.get(key) != "present":
                 payload[key] = "not_present"
+        return FirstPassEvidenceSignals.model_validate(payload)
+
+    @staticmethod
+    def _all_not_present(result: FirstPassEvidenceSignals) -> bool:
+        return all(getattr(result, key) == "not_present" for key in SIGNAL_KEYS)
+
+    @staticmethod
+    def _forced_guess_status(confidence: float) -> str:
+        if confidence >= FORCED_GUESS_PRESENT_THRESHOLD:
+            return "present"
+        if confidence >= FORCED_GUESS_MANUAL_THRESHOLD:
+            return "manual_check"
+        return "not_present"
+
+    @staticmethod
+    def _meaningful_context_text(value: str | None) -> bool:
+        normalized = str(value or "").strip().casefold()
+        return bool(normalized) and normalized not in NEGATIVE_TEXT_VALUES
+
+    @classmethod
+    def _context_claims(cls, applicant_context: dict[str, str] | None) -> dict[str, bool]:
+        context = applicant_context or {}
+        return {
+            "marriage": row_claim_is_married(context.get("marital_status")),
+            "self_illness": cls._meaningful_context_text(context.get("personal_health_condition")) or cls._meaningful_context_text(context.get("personal_health_details")),
+            "family_illness": any(
+                [
+                    cls._meaningful_context_text(context.get("spouse_health_condition")),
+                    cls._meaningful_context_text(context.get("spouse_health_details")),
+                    cls._meaningful_context_text(context.get("children_health_issue_score")),
+                    cls._meaningful_context_text(context.get("parent_health_issue_score")),
+                ]
+            ),
+            "spouse_location": row_claim_is_married(context.get("marital_status"))
+            and any(
+                [
+                    cls._meaningful_context_text(context.get("spouse_employment_status")),
+                    cls._meaningful_context_text(context.get("spouse_job_title")),
+                    cls._meaningful_context_text(context.get("spouse_work_address")),
+                    cls._meaningful_context_text(context.get("spouse_work_state")),
+                ]
+            ),
+            "oku_self_or_family": any(
+                [
+                    row_has_oku_claim(context.get("applicant_oku_status")),
+                    row_has_oku_claim(context.get("spouse_oku_status")),
+                    cls._meaningful_context_text(context.get("children_disability_score")),
+                    cls._meaningful_context_text(context.get("parent_disability_score")),
+                ]
+            ),
+            "medex_or_other_exam": row_has_postgraduate_claim(context.get("postgraduate_status")),
+        }
+
+    @staticmethod
+    def _page_label_payload(page_number: int, payload: FirstPassSignalsSchema) -> dict[str, object]:
+        result = {
+            "page": page_number,
+            "best_fit_bucket": payload.best_fit_bucket,
+            "best_fit_confidence": payload.best_fit_confidence,
+            "subject_role": payload.subject_role,
+            "subject_role_confidence": payload.subject_role_confidence,
+        }
+        for key in SIGNAL_KEYS:
+            result[key] = getattr(payload, key)
+        result["reasons"] = list(payload.reasons)
+        return result
+
+    @staticmethod
+    def _page_roles_for_signal(signal: str) -> set[str]:
+        if signal == "self_illness":
+            return {"applicant", "unknown"}
+        if signal == "family_illness":
+            return {"spouse", "family", "unknown"}
+        if signal == "spouse_location":
+            return {"spouse", "unknown"}
+        if signal == "medex_or_other_exam":
+            return {"applicant", "unknown"}
+        return {"applicant", "spouse", "family", "other_person", "unknown"}
+
+    @staticmethod
+    def _candidate_pages_for_signal(signal: str, chunk_payloads: list[dict[str, object]]) -> list[int]:
+        candidates: list[int] = []
+        allowed_roles = FirstPassEvidenceScanner._page_roles_for_signal(signal)
+        for index, chunk in enumerate(chunk_payloads):
+            best_fit_bucket = chunk.get("best_fit_bucket")
+            best_fit_confidence = float(chunk.get("best_fit_confidence") or 0.0)
+            signal_status = str(chunk.get(signal) or "not_present")
+            subject_role = str(chunk.get("subject_role") or "unknown")
+            if subject_role not in allowed_roles and signal not in {"marriage", "oku_self_or_family"}:
+                continue
+            if signal_status in {"present", "manual_check"} or (best_fit_bucket == signal and best_fit_confidence >= TARGETED_MANUAL_THRESHOLD):
+                candidates.append(index)
+        return candidates
+
+    @staticmethod
+    def _promote_targeted_signal(signal: str, page_payloads: list[dict[str, object]]) -> tuple[str, list[str]]:
+        if not page_payloads:
+            return "not_present", []
+        present_count = sum(1 for payload in page_payloads if str(payload.get(signal)) == "present")
+        manual_count = sum(1 for payload in page_payloads if str(payload.get(signal)) == "manual_check")
+        best_fit_matches = [
+            float(payload.get("best_fit_confidence") or 0.0)
+            for payload in page_payloads
+            if payload.get("best_fit_bucket") == signal
+        ]
+        reasons: list[str] = []
+        if present_count >= 1:
+            reasons.append(f"Claim-aware second pass found {signal.replace('_', ' ')} on at least one page.")
+            return "present", reasons
+        if len(best_fit_matches) >= 2 and sum(best_fit_matches) / len(best_fit_matches) >= TARGETED_PRESENT_THRESHOLD:
+            reasons.append(f"Claim-aware second pass found repeated page labels for {signal.replace('_', ' ')}.")
+            return "present", reasons
+        if manual_count >= 1 or best_fit_matches:
+            reasons.append(f"Claim-aware second pass found a plausible {signal.replace('_', ' ')} page but not a clear confirmation.")
+            return "manual_check", reasons
+        return "not_present", reasons
+
+    @classmethod
+    def _apply_chunk_guess_fallback(
+        cls,
+        chunk_result: FirstPassEvidenceSignals,
+        payload: FirstPassSignalsSchema,
+    ) -> FirstPassEvidenceSignals:
+        if not cls._all_not_present(chunk_result):
+            return chunk_result
+        bucket = payload.best_fit_bucket
+        status = cls._forced_guess_status(payload.best_fit_confidence)
+        if not bucket or status == "not_present":
+            return chunk_result
+        promoted = chunk_result.model_dump(mode="json")
+        promoted[bucket] = status
+        promoted["reasons"] = list(
+            dict.fromkeys(
+                [
+                    *chunk_result.reasons,
+                    f"Forced best-fit page guess promoted {bucket.replace('_', ' ')} to {status}.",
+                ]
+            )
+        )
+        return FirstPassEvidenceSignals.model_validate(promoted)
+
+    @classmethod
+    def _apply_document_guess_fallback(
+        cls,
+        result: FirstPassEvidenceSignals,
+        chunk_payloads: list[dict[str, object]],
+    ) -> FirstPassEvidenceSignals:
+        payload = result.model_dump(mode="json")
+        guess_counts = {key: 0 for key in SIGNAL_KEYS}
+        guess_confidence = {key: 0.0 for key in SIGNAL_KEYS}
+        total_chunks = len(chunk_payloads)
+        for chunk in chunk_payloads:
+            bucket = chunk.get("best_fit_bucket")
+            confidence = float(chunk.get("best_fit_confidence") or 0.0)
+            if bucket not in SIGNAL_KEYS:
+                continue
+            guess_counts[bucket] += 1
+            guess_confidence[bucket] += confidence
+        if not total_chunks:
+            return result
+        required_count = max(2, (total_chunks + 1) // 2)
+        for key in SIGNAL_KEYS:
+            if payload.get(key) != "not_present":
+                continue
+            count = guess_counts[key]
+            if count < required_count and not (total_chunks == 1 and count == 1):
+                continue
+            average_confidence = guess_confidence[key] / max(count, 1)
+            if total_chunks > 1:
+                promoted_status = "present" if average_confidence >= DOCUMENT_GUESS_PRESENT_THRESHOLD else "manual_check"
+            else:
+                promoted_status = cls._forced_guess_status(average_confidence)
+            if promoted_status == "not_present":
+                continue
+            payload[key] = promoted_status
+            payload["reasons"] = list(
+                dict.fromkeys(
+                    [
+                        *payload.get("reasons", []),
+                        (
+                            f"Repeated best-fit page guesses promoted {key.replace('_', ' ')} to "
+                            f"{promoted_status}."
+                        ),
+                    ]
+                )
+            )
         return FirstPassEvidenceSignals.model_validate(payload)
 
     @staticmethod
@@ -227,6 +428,86 @@ class FirstPassEvidenceScanner:
             if isinstance(reasons, list):
                 pieces.extend(str(reason) for reason in reasons)
         return " ".join(pieces)
+
+    @staticmethod
+    def _all_statuses_not_present(payload: FirstPassSignalsSchema) -> bool:
+        return all(getattr(payload, key) == "not_present" for key in SIGNAL_KEYS)
+
+    @staticmethod
+    def _merge_page_payloads(primary: FirstPassSignalsSchema, secondary: FirstPassSignalsSchema | None = None) -> FirstPassSignalsSchema:
+        if secondary is None:
+            return primary
+        payload = primary.model_dump(mode="json")
+        secondary_payload = secondary.model_dump(mode="json")
+        for key in SIGNAL_KEYS:
+            current = payload.get(key, "not_present")
+            candidate = secondary_payload.get(key, "not_present")
+            if STATUS_PRIORITY[candidate] > STATUS_PRIORITY[current]:
+                payload[key] = candidate
+        primary_bucket_confidence = float(payload.get("best_fit_confidence") or 0.0)
+        secondary_bucket_confidence = float(secondary_payload.get("best_fit_confidence") or 0.0)
+        if secondary_bucket_confidence > primary_bucket_confidence:
+            payload["best_fit_bucket"] = secondary_payload.get("best_fit_bucket")
+            payload["best_fit_confidence"] = secondary_bucket_confidence
+        primary_role_confidence = float(payload.get("subject_role_confidence") or 0.0)
+        secondary_role_confidence = float(secondary_payload.get("subject_role_confidence") or 0.0)
+        if payload.get("subject_role") == "unknown" and secondary_payload.get("subject_role") != "unknown":
+            payload["subject_role"] = secondary_payload.get("subject_role")
+            payload["subject_role_confidence"] = secondary_role_confidence
+        elif secondary_role_confidence > primary_role_confidence:
+            payload["subject_role"] = secondary_payload.get("subject_role")
+            payload["subject_role_confidence"] = secondary_role_confidence
+        payload["reasons"] = list(dict.fromkeys([*primary.reasons, *secondary.reasons]))
+        return FirstPassSignalsSchema.model_validate(payload)
+
+    def _scan_page_with_models(
+        self,
+        prompt: str,
+        image_paths: list[str],
+        *,
+        run_secondary_on_weak_primary: bool = True,
+    ) -> tuple[FirstPassSignalsSchema, list[str]]:
+        if not (self.llm_client and self.llm_client.is_vision_enabled()):
+            raise ValueError("Vision model is not available.")
+
+        primary_model = self.llm_client.vision_model_name()
+        secondary_model = self._secondary_model_name()
+        try:
+            primary_payload = parse_model_response(
+                self.llm_client.generate_vision(prompt, image_paths=image_paths, model=primary_model),
+                FirstPassSignalsSchema,
+            )
+            models_used = [primary_model]
+        except Exception:  # noqa: BLE001
+            if not secondary_model:
+                raise
+            secondary_payload = parse_model_response(
+                self.llm_client.generate_vision(prompt, image_paths=image_paths, model=secondary_model),
+                FirstPassSignalsSchema,
+            )
+            return secondary_payload, [secondary_model]
+
+        should_try_secondary = (
+            secondary_model
+            and run_secondary_on_weak_primary
+            and (
+                self._all_statuses_not_present(primary_payload)
+                or float(primary_payload.best_fit_confidence or 0.0) < FORCED_GUESS_MANUAL_THRESHOLD
+            )
+        )
+        if not should_try_secondary:
+            return primary_payload, models_used
+
+        try:
+            secondary_payload = parse_model_response(
+                self.llm_client.generate_vision(prompt, image_paths=image_paths, model=secondary_model),
+                FirstPassSignalsSchema,
+            )
+        except Exception:  # noqa: BLE001
+            return primary_payload, models_used
+
+        models_used.append(secondary_model)
+        return self._merge_page_payloads(primary_payload, secondary_payload), models_used
 
     def _post_process_result(
         self,
@@ -276,6 +557,60 @@ class FirstPassEvidenceScanner:
         except Exception:  # noqa: BLE001
             return self._empty_result()
 
+    def _claim_recovery_scan(
+        self,
+        document: OCRDocument,
+        applicant_context: dict[str, str] | None,
+        images: list[str],
+        chunk_payloads: list[dict[str, object]],
+        current_result: FirstPassEvidenceSignals,
+    ) -> tuple[FirstPassEvidenceSignals, dict[str, dict[str, object]]]:
+        if not (self.llm_client and self.llm_client.is_vision_enabled() and images):
+            return current_result, {}
+        claims = self._context_claims(applicant_context)
+        recovery_payload: dict[str, dict[str, object]] = {}
+        updated_payload = current_result.model_dump(mode="json")
+
+        for signal, claimed in claims.items():
+            if not claimed or updated_payload.get(signal) == "present":
+                continue
+            candidate_indexes = self._candidate_pages_for_signal(signal, chunk_payloads)
+            if not candidate_indexes:
+                candidate_indexes = list(range(len(images)))
+            page_payloads: list[dict[str, object]] = []
+            for page_index in candidate_indexes:
+                page_number = page_index + 1
+                try:
+                    payload, models_used = self._scan_page_with_models(
+                        first_pass_signals_prompt(
+                            self._page_text(document, page_index, page_index + 1),
+                            applicant_context=applicant_context,
+                            include_images=True,
+                            page_range=self._page_range(document, page_index, page_index + 1),
+                            focus_signal=signal,
+                        ),
+                        image_paths=[images[page_index]],
+                    )
+                    page_payload = self._page_label_payload(page_number, payload)
+                    page_payload["models_used"] = models_used
+                    page_payloads.append(page_payload)
+                except Exception:  # noqa: BLE001
+                    continue
+            recovered_status, reasons = self._promote_targeted_signal(signal, page_payloads)
+            if STATUS_PRIORITY[recovered_status] > STATUS_PRIORITY.get(updated_payload.get(signal, "not_present"), 0):
+                updated_payload[signal] = recovered_status
+            if reasons:
+                updated_payload["reasons"] = list(dict.fromkeys([*updated_payload.get("reasons", []), *reasons]))
+            recovery_payload[signal] = {
+                "claimed": claimed,
+                "candidate_pages": [index + 1 for index in candidate_indexes],
+                "page_labels": page_payloads,
+                "final_status": recovered_status,
+                "reasons": reasons,
+            }
+
+        return FirstPassEvidenceSignals.model_validate(updated_payload), recovery_payload
+
     def scan(self, document: OCRDocument, applicant_context: dict[str, str] | None = None) -> FirstPassEvidenceSignals:
         desired_mode, model_name = self._desired_mode(document)
         cache_path = self._cache_path(document.processing_hash, desired_mode, model_name)
@@ -290,13 +625,14 @@ class FirstPassEvidenceScanner:
             chunk_size = 1
             chunk_results: list[FirstPassEvidenceSignals] = []
             chunk_payloads: list[dict[str, object]] = []
+            page_labels: list[dict[str, object]] = []
             for start in range(0, len(images), chunk_size):
                 stop = start + chunk_size
                 chunk_images = images[start:stop]
                 if not chunk_images:
                     continue
                 try:
-                    response = self.llm_client.generate_vision(
+                    payload, models_used = self._scan_page_with_models(
                         first_pass_signals_prompt(
                             self._page_text(document, start, stop),
                             applicant_context=applicant_context,
@@ -305,12 +641,16 @@ class FirstPassEvidenceScanner:
                         ),
                         image_paths=chunk_images,
                     )
-                    payload = parse_model_response(response, FirstPassSignalsSchema)
                     chunk_result = FirstPassEvidenceSignals(**payload.model_dump())
+                    chunk_result = self._apply_chunk_guess_fallback(chunk_result, payload)
                     chunk_results.append(chunk_result)
+                    page_label = self._page_label_payload(start + 1, payload)
+                    page_label["models_used"] = models_used
+                    page_labels.append(page_label)
                     chunk_payloads.append(
                         {
                             "pages": self._page_range(document, start, stop),
+                            "models_used": models_used,
                             **payload.model_dump(mode="json"),
                         }
                     )
@@ -318,15 +658,22 @@ class FirstPassEvidenceScanner:
                     continue
             if chunk_payloads:
                 llm_result = self._aggregate_chunk_results(chunk_results)
+                llm_result = self._apply_document_guess_fallback(llm_result, chunk_payloads)
                 overview_result = self._overview_scan(chunk_payloads, applicant_context=applicant_context)
                 llm_result = self._merge_signals(llm_result, overview_result)
                 result = self._merge_signals(heuristic, llm_result)
                 result = self._post_process_result(result, document, chunk_payloads)
+                result, recovery_payload = self._claim_recovery_scan(document, applicant_context, images, chunk_payloads, result)
                 result.raw_payload = {
                     "_method": desired_mode,
-                    "_model": model_name,
+                    "_model": self.llm_client.vision_model_name(),
+                    "_secondary_model": self._secondary_model_name(),
+                    "_cache_models": model_name,
                     "_cache_version": CACHE_VERSION,
                     "chunks": chunk_payloads,
+                    "page_labels": page_labels,
+                    "claims": self._context_claims(applicant_context),
+                    "claim_recovery": recovery_payload,
                     "overview": overview_result.raw_payload,
                 }
         elif desired_mode == "ollama_text":

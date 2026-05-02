@@ -9,6 +9,7 @@ from src.io.pdf_locator import PDFLocator
 from src.io.spreadsheet_loader import ApplicantRecord
 from src.langflow_components._base import Component
 from src.settings import AppConfig, load_app_config
+from src.utils.download_url import normalize_download_url
 
 
 class PDFFetchComponent(Component):
@@ -26,6 +27,7 @@ class PDFFetchComponent(Component):
         record = ApplicantRecord(row_index=0, applicant_id=str(applicant_row.get("applicant_id", "")), canonical=applicant_row, raw=applicant_row)
         locator = PDFLocator([pdf_directory, self.settings.paths.pdf_dir, self.settings.paths.downloads_dir])
         located = locator.locate(record)
+        download_url = normalize_download_url(str(applicant_row.get("pdf_url") or ""))
         if located.path is not None:
             return {
                 "path": str(located.path),
@@ -33,9 +35,9 @@ class PDFFetchComponent(Component):
                 "source": located.source,
                 "downloaded": False,
             }
-        if auto_download and str(applicant_row.get("pdf_url") or ""):
+        if auto_download and download_url:
             download = self.downloader.download(
-                str(applicant_row.get("pdf_url")),
+                download_url,
                 self.settings.paths.downloads_dir,
                 str(applicant_row.get("pdf_filename") or f"{record.applicant_id}.pdf"),
             )

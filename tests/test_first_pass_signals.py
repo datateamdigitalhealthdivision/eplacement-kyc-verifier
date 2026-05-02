@@ -78,7 +78,7 @@ def test_first_pass_scanner_aggregates_across_image_chunks(tmp_path: Path) -> No
 
     assert result.marriage == "present"
     assert result.self_illness == "present"
-    assert result.family_illness == "not_present"
+    assert result.family_illness == "manual_check"
     assert result.spouse_location == "present"
     assert result.oku_self_or_family == "not_present"
     assert result.medex_or_other_exam == "not_present"
@@ -124,7 +124,7 @@ def test_first_pass_scanner_requires_repeated_manual_signals(tmp_path: Path) -> 
     scanner = FirstPassEvidenceScanner(settings, client)
     result = scanner.scan(document)
 
-    assert result.family_illness == "not_present"
+    assert result.family_illness == "manual_check"
 
 
 def test_first_pass_scanner_filters_routine_physical_exam_from_medex(tmp_path: Path) -> None:
@@ -157,3 +157,80 @@ def test_first_pass_scanner_filters_routine_physical_exam_from_medex(tmp_path: P
     result = scanner.scan(document)
 
     assert result.medex_or_other_exam == "not_present"
+
+
+def test_first_pass_scanner_uses_forced_best_fit_when_pages_would_otherwise_vanish(tmp_path: Path) -> None:
+    settings = make_test_settings(tmp_path)
+    settings.ollama.vision_max_images = 1
+
+    image_paths = []
+    for index in range(3):
+        image_path = tmp_path / f"guess_page_{index + 1}.png"
+        image_path.write_bytes(PNG_BYTES)
+        image_paths.append(str(image_path))
+
+    document = OCRDocument(
+        applicant_id="930620115062",
+        document_path=str(tmp_path / "930620115062.pdf"),
+        document_hash="guess-doc-hash",
+        processing_hash="guess-proc-hash",
+        pages=[
+            OCRPage(page_number=1, extracted_text="", engine_used="vision"),
+            OCRPage(page_number=2, extracted_text="", engine_used="vision"),
+            OCRPage(page_number=3, extracted_text="", engine_used="vision"),
+        ],
+        page_image_paths=image_paths,
+        combined_text="",
+        warnings=[],
+        metadata={},
+    )
+
+    client = FakeVisionClient(
+        [
+            '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","best_fit_bucket":"marriage","best_fit_confidence":0.58,"reasons":["Looks like a marriage certificate layout."]}',
+            '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","best_fit_bucket":"marriage","best_fit_confidence":0.57,"reasons":["Marriage-style seal and form fields visible."]}',
+            '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","best_fit_bucket":"marriage","best_fit_confidence":0.59,"reasons":["Weak OCR but page still resembles marriage evidence."]}',
+        ],
+        '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","reasons":[]}',
+    )
+
+    scanner = FirstPassEvidenceScanner(settings, client)
+    result = scanner.scan(document)
+
+    assert result.marriage == "manual_check"
+    assert any("Forced best-fit page guess promoted marriage" in reason for reason in result.reasons)
+
+
+def test_first_pass_scanner_runs_claim_recovery_second_pass(tmp_path: Path) -> None:
+    settings = make_test_settings(tmp_path)
+    settings.ollama.vision_max_images = 1
+
+    image_path = tmp_path / "recovery_page_1.png"
+    image_path.write_bytes(PNG_BYTES)
+
+    document = OCRDocument(
+        applicant_id="950213146361",
+        document_path=str(tmp_path / "950213146361.pdf"),
+        document_hash="recovery-doc-hash",
+        processing_hash="recovery-proc-hash",
+        pages=[OCRPage(page_number=1, extracted_text="", engine_used="vision")],
+        page_image_paths=[str(image_path)],
+        combined_text="",
+        warnings=[],
+        metadata={},
+    )
+
+    client = FakeVisionClient(
+        [
+            '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","best_fit_bucket":"self_illness","best_fit_confidence":0.20,"reasons":["Weak OCR only."]}',
+            '{"marriage":"present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","best_fit_bucket":"marriage","best_fit_confidence":0.66,"reasons":["Second pass found a marriage certificate layout and seal."]}',
+        ],
+        '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","reasons":[]}',
+    )
+
+    scanner = FirstPassEvidenceScanner(settings, client)
+    result = scanner.scan(document, applicant_context={"marital_status": "BERKAHWIN"})
+
+    assert result.marriage == "present"
+    assert result.raw_payload["claim_recovery"]["marriage"]["final_status"] == "present"
+    assert result.raw_payload["claim_recovery"]["marriage"]["page_labels"][0]["best_fit_bucket"] == "marriage"

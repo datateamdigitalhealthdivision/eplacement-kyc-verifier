@@ -100,18 +100,32 @@ def render_check_section() -> None:
     metric_cols[1].metric("Check", int(check_counts.get("check", 0)))
     metric_cols[2].metric("No Check", int(check_counts.get("no_check", 0)))
 
-    download_cols = st.columns(2)
+    download_cols = st.columns(4)
     if bundle and bundle.decision_csv and Path(bundle.decision_csv).exists():
         download_cols[0].download_button(
-            "Download CSV",
+            "Decision CSV",
             data=Path(bundle.decision_csv).read_bytes(),
             file_name=Path(bundle.decision_csv).name,
         )
     if bundle and bundle.decision_xlsx and Path(bundle.decision_xlsx).exists():
         download_cols[1].download_button(
-            "Download XLSX",
+            "Decision XLSX",
             data=Path(bundle.decision_xlsx).read_bytes(),
             file_name=Path(bundle.decision_xlsx).name,
+        )
+    if bundle and bundle.scoring_csv and Path(bundle.scoring_csv).exists():
+        download_cols[2].download_button(
+            "Scoring CSV",
+            data=Path(bundle.scoring_csv).read_bytes(),
+            file_name=Path(bundle.scoring_csv).name,
+            help="Manual scoring sheet with predicted columns plus blank manual truth columns.",
+        )
+    if bundle and bundle.scoring_xlsx and Path(bundle.scoring_xlsx).exists():
+        download_cols[3].download_button(
+            "Scoring XLSX",
+            data=Path(bundle.scoring_xlsx).read_bytes(),
+            file_name=Path(bundle.scoring_xlsx).name,
+            help="Excel scoring sheet with dropdowns for manual truth columns.",
         )
 
     only_check = st.checkbox("Show only rows that need checking", value=False)
