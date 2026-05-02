@@ -1,4 +1,4 @@
-"""Build a simplified applicant-level decision queue for operators."""
+"""Build a claim-guided applicant decision queue for operators."""
 
 from __future__ import annotations
 
@@ -13,19 +13,15 @@ from src.rules.validators import row_claim_is_married, row_has_oku_claim, row_ha
 
 
 DEFAULT_PDF_BASE_URL = "https://eplacement-2.s3.ap-southeast-5.amazonaws.com/"
-VALID_STATUSES = {"present", "not_present", "manual_check"}
-NEGATIVE_TEXT_VALUES = {
-    "",
-    "0",
-    "tiada",
-    "tidak",
-    "tidak berkenaan",
-    "none",
-    "n/a",
-    "na",
-    "null",
-}
 TICK = "\u2713"
+SIGNAL_EXPORT_KEYS = [
+    "marriage",
+    "self_illness",
+    "family_illness",
+    "spouse_location",
+    "oku_self_or_family",
+    "medex_other_exam",
+]
 
 
 def _text(value) -> str:
@@ -46,13 +42,17 @@ def _normalize_identifier(value) -> str:
 def _as_bool(value) -> bool:
     if isinstance(value, bool):
         return value
-    text = _text(value).casefold()
-    return text in {"1", "true", "yes", "y"}
+    return _text(value).casefold() in {"1", "true", "yes", "y"}
+
+
+def _as_float(value) -> float:
+    text = _text(value)
+    if not text:
+        return 0.0
 
 
 def _has_meaningful_text(value) -> bool:
-    text = _text(value).casefold()
-    return bool(text) and text not in NEGATIVE_TEXT_VALUES
+    return bool(_text(value)) and _text(value).casefold() not in {"0", "tiada", "tidak", "tidak berkenaan", "none", "n/a", "na", "null"}
 
 
 def _numeric_positive(value) -> bool:
@@ -63,6 +63,10 @@ def _numeric_positive(value) -> bool:
         return float(text) > 0
     except ValueError:
         return False
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def _source_info_map(evidence_rows: list[EvidenceResult]) -> dict[str, dict[str, str]]:
@@ -119,109 +123,103 @@ def _row_original_pdf_url(row: pd.Series, applicant_source: dict[str, str], sour
     return _build_original_pdf_url("", source_pdf_name)
 
 
-def _doc_status(row: pd.Series, *, primary_type: str, exact_flag: str, signal_flag: str) -> str:
-    detected_primary = _text(row.get("KYC_DETECTED_PRIMARY_DOC"))
-    has_exact = _as_bool(row.get(exact_flag))
-    has_signal = _as_bool(row.get(signal_flag))
-    if detected_primary == primary_type or has_exact:
+def _supporting_document_present(row: pd.Series, original_pdf_url: str, source_pdf_name: str) -> bool:
+    if _as_bool(row.get("KYC_SUPPORTING_DOC_PRESENT")):
+        return True
+    return bool(_text(original_pdf_url) or _text(source_pdf_name))
+
+
+def _fallback_claim_flags(row: pd.Series) -> dict[str, bool]:
+    return {
+        "marriage": row_claim_is_married(_text(row.get("MARITAL_STATUS") or row.get("marital_status"))),
+        "self_illness": _has_meaningful_text(row.get("PERSONAL_HEALTH_CONDITION") or row.get("personal_health_condition"))
+        or _has_meaningful_text(row.get("Keterangan Kesihatan") or row.get("personal_health_details")),
+        "family_illness": any(
+            [
+                _has_meaningful_text(row.get("SPOUSE_HEALTH_CONDITION") or row.get("spouse_health_condition")),
+                _has_meaningful_text(row.get("Keterangan Masalah Kesihatan Pasanga") or row.get("spouse_health_details")),
+                _numeric_positive(row.get("CHILDREN_HEALTH_ISSUE_SCORE") or row.get("children_health_issue_score")),
+                _numeric_positive(row.get("PARENT_HEALTH_ISSUE_SCORE") or row.get("parent_health_issue_score")),
+            ]
+        ),
+        "spouse_location": row_claim_is_married(_text(row.get("MARITAL_STATUS") or row.get("marital_status")))
+        and any(
+            [
+                _has_meaningful_text(row.get("Alamat Bekerja Pasangan") or row.get("spouse_work_address")),
+                _has_meaningful_text(row.get("NegeriBekerjaPasangan") or row.get("spouse_work_state")),
+                _has_meaningful_text(row.get("Pekerjaan Pasangan") or row.get("spouse_job_title")),
+                _has_meaningful_text(row.get("SPOUSE_EMPLOYMENT_STATUS") or row.get("spouse_employment_status")),
+            ]
+        ),
+        "oku_self_or_family": any(
+            [
+                row_has_oku_claim(_text(row.get("StatusOKU") or row.get("applicant_oku_status"))),
+                row_has_oku_claim(_text(row.get("SPOUSE_STATUS_OKU") or row.get("spouse_oku_status"))),
+                _numeric_positive(row.get("CHILDREN_DISABILITY_SCORE") or row.get("children_disability_score")),
+                _numeric_positive(row.get("PARENT_DISABILITY_SCORE") or row.get("parent_disability_score")),
+            ]
+        ),
+        "medex_other_exam": row_has_postgraduate_claim(_text(row.get("POSTGRADUATE_PAPER_STATUS") or row.get("postgraduate_status"))),
+    }
+
+
+def _signal_status(row: pd.Series, suffix: str) -> str:
+    if f"claimed_{suffix}" not in row.index:
+        legacy_column = {
+            "marriage": "KYC_FIRSTPASS_MARRIAGE",
+            "self_illness": "KYC_FIRSTPASS_SELF_ILLNESS",
+            "family_illness": "KYC_FIRSTPASS_FAMILY_ILLNESS",
+            "spouse_location": "KYC_FIRSTPASS_SPOUSE_LOCATION",
+            "oku_self_or_family": "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY",
+            "medex_other_exam": "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM",
+        }[suffix]
+        legacy_status = _text(row.get(legacy_column)).casefold()
+        return legacy_status if legacy_status in {"present", "manual_check", "not_present"} else "not_present"
+    claimed = _as_bool(row.get(f"claimed_{suffix}"))
+    proof_found = _as_bool(row.get(f"proof_found_{suffix}"))
+    missing_proof = _as_bool(row.get(f"missing_proof_{suffix}"))
+    confidence = _as_float(row.get(f"confidence_{suffix}"))
+    if not claimed:
+        return "not_claimed"
+    if proof_found:
         return "present"
-    if has_signal:
+    if confidence > 0 or missing_proof:
         return "manual_check"
     return "not_present"
 
 
-def _oku_status(row: pd.Series) -> str:
-    if _as_bool(row.get("KYC_DETECTED_OKU_DOCUMENT")) or _as_bool(row.get("KYC_DETECTED_OKU_EVIDENCE")):
-        return "present"
-    return "not_present"
+def _summary(row: pd.Series) -> str:
+    if "claimed_marriage" not in row.index:
+        parts: list[str] = []
+        for suffix, legacy_column in {
+            "marriage": "KYC_FIRSTPASS_MARRIAGE",
+            "self_illness": "KYC_FIRSTPASS_SELF_ILLNESS",
+            "family_illness": "KYC_FIRSTPASS_FAMILY_ILLNESS",
+            "spouse_location": "KYC_FIRSTPASS_SPOUSE_LOCATION",
+            "oku_self_or_family": "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY",
+            "medex_other_exam": "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM",
+        }.items():
+            status = _text(row.get(legacy_column)).casefold()
+            if status == "present":
+                parts.append(f"{suffix.replace('_', ' ').capitalize()} present.")
+            elif status == "manual_check":
+                parts.append(f"{suffix.replace('_', ' ').capitalize()} unclear.")
+        return " | ".join(parts) or "No target evidence detected."
+    parts: list[str] = []
+    for suffix in SIGNAL_EXPORT_KEYS:
+        claimed = _as_bool(row.get(f"claimed_{suffix}"))
+        if not claimed:
+            continue
+        summary = _text(row.get(f"evidence_summary_{suffix}"))
+        if summary:
+            parts.append(summary)
+    if _as_bool(row.get("KYC_NEEDS_MANUAL_REVIEW")) and _text(row.get("KYC_OVERALL_REASON")):
+        parts.append(_text(row.get("KYC_OVERALL_REASON")))
+    return " | ".join(dict.fromkeys(part for part in parts if part)) or "No claimed evidence categories required verification."
 
 
-def _first_pass_status(row: pd.Series, column: str, fallback: str) -> str:
-    status = _text(row.get(column)).casefold()
-    if status in VALID_STATUSES:
-        return status
-    return fallback
-
-
-def _summary_line(label: str, status: str) -> str:
-    if status == "present":
-        return f"{label} present."
-    if status == "manual_check":
-        return f"{label} unclear."
-    return ""
-
-
-def _display_tick(status: str) -> str:
-    return TICK if status == "present" else ""
-
-
-def _claim_self_illness(row: pd.Series) -> bool:
-    return _has_meaningful_text(row.get("PERSONAL_HEALTH_CONDITION")) or _has_meaningful_text(row.get("Keterangan Kesihatan"))
-
-
-def _claim_family_illness(row: pd.Series) -> bool:
-    return any(
-        [
-            _has_meaningful_text(row.get("SPOUSE_HEALTH_CONDITION")),
-            _has_meaningful_text(row.get("Keterangan Masalah Kesihatan Pasanga")),
-            _numeric_positive(row.get("CHILDREN_HEALTH_ISSUE_SCORE")),
-            _numeric_positive(row.get("PARENT_HEALTH_ISSUE_SCORE")),
-        ]
-    )
-
-
-def _claim_spouse_location(row: pd.Series) -> bool:
-    if not row_claim_is_married(_text(row.get("MARITAL_STATUS"))):
-        return False
-    return any(
-        [
-            _has_meaningful_text(row.get("Alamat Bekerja Pasangan")),
-            _has_meaningful_text(row.get("NegeriBekerjaPasangan")),
-            _has_meaningful_text(row.get("Pekerjaan Pasangan")),
-            _has_meaningful_text(row.get("SPOUSE_EMPLOYMENT_STATUS")),
-        ]
-    )
-
-
-def _claim_oku_self_or_family(row: pd.Series) -> bool:
-    return any(
-        [
-            row_has_oku_claim(_text(row.get("StatusOKU"))),
-            row_has_oku_claim(_text(row.get("SPOUSE_STATUS_OKU"))),
-            _numeric_positive(row.get("CHILDREN_DISABILITY_SCORE")),
-            _numeric_positive(row.get("PARENT_DISABILITY_SCORE")),
-        ]
-    )
-
-
-def _claim_flags(row: pd.Series) -> dict[str, bool]:
-    return {
-        "marriage": row_claim_is_married(_text(row.get("MARITAL_STATUS"))),
-        "self_illness": _claim_self_illness(row),
-        "family_illness": _claim_family_illness(row),
-        "spouse_location": _claim_spouse_location(row),
-        "oku_self_or_family": _claim_oku_self_or_family(row),
-        "medex_other_exam": row_has_postgraduate_claim(_text(row.get("POSTGRADUATE_PAPER_STATUS"))),
-    }
-
-
-def _has_supporting_document(row: pd.Series, original_pdf_url: str, source_pdf_name: str) -> bool:
-    if _as_bool(row.get("KYC_SUPPORTING_DOC_PRESENT")):
-        return True
-    if _text(original_pdf_url):
-        return True
-    if _text(source_pdf_name):
-        return True
-    return False
-
-
-def _gross_mismatch_reasons(
-    statuses: dict[str, str],
-    claims: dict[str, bool],
-    *,
-    has_supporting_document: bool,
-) -> list[str]:
-    labels = {
+def _legacy_check_reasons(claimed_flags: dict[str, bool], signal_statuses: dict[str, str]) -> list[str]:
+    label_map = {
         "marriage": "marriage",
         "self_illness": "self illness",
         "family_illness": "family illness",
@@ -229,28 +227,21 @@ def _gross_mismatch_reasons(
         "oku_self_or_family": "OKU self/family",
         "medex_other_exam": "MedEX/other exam",
     }
-    claimed_signals = [signal for signal, claimed in claims.items() if claimed]
-    present_claims = [signal for signal in claimed_signals if statuses.get(signal) == "present"]
-    ambiguous_claims = [signal for signal in claimed_signals if statuses.get(signal) == "manual_check"]
-    missing_claims = [signal for signal in claimed_signals if statuses.get(signal) == "not_present"]
+    present_claims = [suffix for suffix, claimed in claimed_flags.items() if claimed and signal_statuses[suffix] == "present"]
+    missing_claims = [suffix for suffix, claimed in claimed_flags.items() if claimed and signal_statuses[suffix] == "not_present"]
+    ambiguous_claims = [suffix for suffix, claimed in claimed_flags.items() if claimed and signal_statuses[suffix] == "manual_check"]
     reasons: list[str] = []
-
-    if claimed_signals and not has_supporting_document:
-        reasons.append("Claimed evidence exists in the spreadsheet but no supporting document was available.")
-
     if missing_claims:
-        missing = ", ".join(labels[signal] for signal in missing_claims)
+        missing = ", ".join(label_map[suffix] for suffix in missing_claims)
         if present_claims:
-            detected = ", ".join(labels[signal] for signal in present_claims)
+            detected = ", ".join(label_map[suffix] for suffix in present_claims)
             reasons.append(f"Detected {detected}, but missing claimed {missing}.")
         else:
             reasons.append(f"Missing claimed {missing} after the second pass.")
-
     if ambiguous_claims:
-        ambiguous = ", ".join(labels[signal] for signal in ambiguous_claims)
+        ambiguous = ", ".join(label_map[suffix] for suffix in ambiguous_claims)
         reasons.append(f"Claimed {ambiguous} is still ambiguous after the second pass.")
-
-    return list(dict.fromkeys(reasons))
+    return reasons
 
 
 def build_decision_queue(merged_df: pd.DataFrame, evidence_rows: list[EvidenceResult]) -> pd.DataFrame:
@@ -261,82 +252,48 @@ def build_decision_queue(merged_df: pd.DataFrame, evidence_rows: list[EvidenceRe
         applicant_id = _normalize_identifier(row.get("KYC_APPLICANT_ID_NORMALIZED") or row.get("applicant_id") or row.get("NO KP"))
         if not applicant_id:
             continue
+
         applicant_source = source_info.get(applicant_id, {"source_pdf_name": "", "original_pdf_url": ""})
-
-        marriage = _first_pass_status(
-            row,
-            "KYC_FIRSTPASS_MARRIAGE",
-            _doc_status(
-                row,
-                primary_type="marriage_certificate",
-                exact_flag="KYC_DETECTED_MARRIAGE_CERTIFICATE",
-                signal_flag="KYC_DETECTED_MARRIAGE_EVIDENCE",
-            ),
-        )
-        self_illness = _first_pass_status(row, "KYC_FIRSTPASS_SELF_ILLNESS", "not_present")
-        family_illness = _first_pass_status(row, "KYC_FIRSTPASS_FAMILY_ILLNESS", "not_present")
-        spouse_location = _first_pass_status(row, "KYC_FIRSTPASS_SPOUSE_LOCATION", "not_present")
-        oku_self_or_family = _first_pass_status(row, "KYC_FIRSTPASS_OKU_SELF_OR_FAMILY", _oku_status(row))
-        medex_other_exam = _first_pass_status(
-            row,
-            "KYC_FIRSTPASS_MEDEX_OR_OTHER_EXAM",
-            _doc_status(
-                row,
-                primary_type="medex_or_exam_document",
-                exact_flag="KYC_DETECTED_MEDEX_EXAM_DOCUMENT",
-                signal_flag="KYC_DETECTED_MEDEX_EVIDENCE",
-            ),
-        )
-
-        statuses = {
-            "marriage": marriage,
-            "self_illness": self_illness,
-            "family_illness": family_illness,
-            "spouse_location": spouse_location,
-            "oku_self_or_family": oku_self_or_family,
-            "medex_other_exam": medex_other_exam,
-        }
-        claims = _claim_flags(row)
-
-        summary_parts = [
-            _summary_line("Marriage", marriage),
-            _summary_line("Self illness", self_illness),
-            _summary_line("Family illness", family_illness),
-            _summary_line("Spouse location", spouse_location),
-            _summary_line("OKU", oku_self_or_family),
-            _summary_line("MedEX/exam", medex_other_exam),
-        ]
-
         source_pdf_name = _row_source_pdf_name(row, applicant_source, applicant_id)
         original_pdf_url = _row_original_pdf_url(row, applicant_source, source_pdf_name)
-        has_supporting_document = _has_supporting_document(row, original_pdf_url, source_pdf_name)
-        check_reasons = _gross_mismatch_reasons(statuses, claims, has_supporting_document=has_supporting_document)
-        check_required = "check" if check_reasons else "no_check"
-        summary = " | ".join(part for part in [*summary_parts, *check_reasons] if part) or "No target evidence detected."
+        has_document = _supporting_document_present(row, original_pdf_url, source_pdf_name)
 
-        rows.append(
-            {
-                "applicant_id": applicant_id,
-                "marriage": _display_tick(marriage),
-                "self_illness": _display_tick(self_illness),
-                "family_illness": _display_tick(family_illness),
-                "spouse_location": _display_tick(spouse_location),
-                "oku_self_or_family": _display_tick(oku_self_or_family),
-                "medex_other_exam": _display_tick(medex_other_exam),
-                "marriage_status": marriage,
-                "self_illness_status": self_illness,
-                "family_illness_status": family_illness,
-                "spouse_location_status": spouse_location,
-                "oku_self_or_family_status": oku_self_or_family,
-                "medex_other_exam_status": medex_other_exam,
-                "check_required": check_required,
-                "summary": summary,
-                "original_pdf_url": original_pdf_url,
-                "open_original_pdf": original_pdf_url,
-                "source_pdf_name": source_pdf_name,
-                "_check_sort": 0 if check_required == "check" else 1,
-            }
-        )
+        signal_statuses = {suffix: _signal_status(row, suffix) for suffix in SIGNAL_EXPORT_KEYS}
+        if "claimed_marriage" in row.index:
+            claimed_flags = {suffix: _as_bool(row.get(f"claimed_{suffix}")) for suffix in SIGNAL_EXPORT_KEYS}
+            check_required = "check" if _as_bool(row.get("KYC_NEEDS_MANUAL_REVIEW")) else "no_check"
+            summary = _summary(row)
+        else:
+            claimed_flags = _fallback_claim_flags(row)
+            missing_claims = [suffix for suffix, claimed in claimed_flags.items() if claimed and signal_statuses[suffix] == "not_present"]
+            ambiguous_claims = [suffix for suffix, claimed in claimed_flags.items() if claimed and signal_statuses[suffix] == "manual_check"]
+            check_required = "check" if (missing_claims or ambiguous_claims) else "no_check"
+            summary_parts = [_summary(row), *_legacy_check_reasons(claimed_flags, signal_statuses)]
+            summary = " | ".join(part for part in summary_parts if part) or "No target evidence detected."
+
+        queue_row: dict[str, object] = {
+            "applicant_id": applicant_id,
+            "check_required": check_required,
+            "summary": summary,
+            "original_pdf_url": original_pdf_url,
+            "open_original_pdf": original_pdf_url,
+            "source_pdf_name": source_pdf_name,
+            "supporting_document_present": has_document,
+            "_check_sort": 0 if check_required == "check" else 1,
+        }
+
+        for suffix, status in signal_statuses.items():
+            queue_row[suffix] = TICK if status == "present" else ""
+            queue_row[f"{suffix}_status"] = status
+            queue_row[f"claimed_{suffix}"] = claimed_flags[suffix]
+            queue_row[f"proof_found_{suffix}"] = _as_bool(row.get(f"proof_found_{suffix}")) if f"proof_found_{suffix}" in row.index else status == "present"
+            queue_row[f"verified_{suffix}"] = _as_bool(row.get(f"verified_{suffix}")) if f"verified_{suffix}" in row.index else (claimed_flags[suffix] and status == "present")
+            queue_row[f"missing_proof_{suffix}"] = _as_bool(row.get(f"missing_proof_{suffix}")) if f"missing_proof_{suffix}" in row.index else (claimed_flags[suffix] and status != "present")
+            queue_row[f"supporting_page_{suffix}"] = _text(row.get(f"supporting_page_{suffix}"))
+            queue_row[f"evidence_summary_{suffix}"] = _text(row.get(f"evidence_summary_{suffix}"))
+            queue_row[f"confidence_{suffix}"] = _as_float(row.get(f"confidence_{suffix}"))
+
+        rows.append(queue_row)
 
     decision_df = pd.DataFrame(rows)
     if decision_df.empty:

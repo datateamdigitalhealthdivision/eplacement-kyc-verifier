@@ -52,6 +52,12 @@ class LangflowSection(BaseModel):
     enabled: bool = True
 
 
+class VerifierSection(BaseModel):
+    mode: str = "claim_guided_verifier"
+    present_confidence_threshold: float = 0.65
+    early_stop_confidence_threshold: float = 0.75
+
+
 class BatchSection(BaseModel):
     concurrency: int = 2
     retry_count: int = 2
@@ -84,6 +90,7 @@ class AppConfig(BaseModel):
     paths: PathsSection
     ollama: OllamaSection
     langflow: LangflowSection
+    verifier: VerifierSection
     batch: BatchSection
     ocr: OCRSection
     privacy: PrivacySection
@@ -139,6 +146,8 @@ def _merge_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
             pass
     if base_url := os.getenv("EPKYC_LANGFLOW_BASE_URL"):
         config.setdefault("langflow", {})["base_url"] = base_url
+    if verifier_mode := os.getenv("EPKYC_VERIFIER_MODE"):
+        config.setdefault("verifier", {})["mode"] = verifier_mode
     if level := os.getenv("EPKYC_LOG_LEVEL"):
         config.setdefault("logging", {})["level"] = level
     return config

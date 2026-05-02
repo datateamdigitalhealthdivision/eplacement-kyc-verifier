@@ -9,6 +9,7 @@ from typing import Iterable
 
 from src.db.models import ExportBundle, RunJobRequest
 from src.db.sqlite_store import SQLiteStore
+from src.extraction.applicant_claims import extract_applicant_claims
 from src.extraction.evidence_models import EvidenceResult
 from src.langflow_components.applicant_loader import ApplicantLoaderComponent
 from src.langflow_components.export_component import ExportWriterComponent
@@ -18,7 +19,6 @@ from src.langflow_components.pdf_fetch_component import PDFFetchComponent
 from src.llm.ollama_client import OllamaClient
 from src.orchestration.result_builder import (
     applicant_context,
-    candidate_claims,
     candidate_failure_result,
     candidate_result,
     summary,
@@ -78,18 +78,44 @@ class LangflowFirstPassRunner:
             started = perf_counter()
             try:
                 context = applicant_context(record)
-                claims = candidate_claims(record.canonical)
+                claims = extract_applicant_claims(record.canonical)
+                if self.settings.verifier.mode == "claim_guided_verifier" and not claims.active_signals():
+                    if claims.is_unclear():
+                        reason = "Claim extraction from the spreadsheet is unclear: " + ", ".join(claims.notes or claims.unclear_claims) + "."
+                        result = candidate_failure_result(
+                            job_id=job_id,
+                            record=record,
+                            status="MANUAL_REVIEW_REQUIRED",
+                            reason=reason,
+                            download_url=record.canonical.get("pdf_url"),
+                        )
+                    else:
+                        result = candidate_failure_result(
+                            job_id=job_id,
+                            record=record,
+                            status="CONFIRMED",
+                            reason="No claimed evidence categories required verification.",
+                            download_url=record.canonical.get("pdf_url"),
+                        )
+                    evidence_results.append(result)
+                    self.store.save_evidence_result(result)
+                    counters[result.final_status] += 1
+                    self.store.log_event(job_id, "INFO", f"Skipped OCR and PDF checks for applicant {record.applicant_id} because no claim-guided evidence categories were active.")
+                    self.store.update_job(job_id, progress_completed=completed, counters=dict(counters))
+                    continue
                 fetch_result = self.fetch_node.fetch_pdf(record.canonical, pdf_directory, request.auto_download)
                 pdf_path = Path(fetch_result["path"]) if fetch_result.get("path") else None
                 if pdf_path is not None:
                     downloaded_count += int(bool(fetch_result.get("downloaded", False)))
                 if pdf_path is None:
-                    has_claims = any(claims.values())
-                    failure_status = "DOWNLOAD_FAILED" if has_claims and fetch_result.get("error") else "DOCUMENT_MISSING" if has_claims else "CONFIRMED"
+                    has_claims = bool(claims.active_signals())
+                    unclear_claims = claims.is_unclear()
+                    needs_review = has_claims or unclear_claims
+                    failure_status = "DOWNLOAD_FAILED" if needs_review and fetch_result.get("error") else "DOCUMENT_MISSING" if needs_review else "CONFIRMED"
                     failure_reason = (
                         fetch_result.get("error")
                         or fetch_result.get("message")
-                        or ("Supporting document not found." if has_claims else "No claimed evidence and no supporting PDF was required.")
+                        or ("Supporting document not found." if needs_review else "No claimed evidence and no supporting PDF was required.")
                     )
                     result = candidate_failure_result(
                         job_id=job_id,
@@ -106,7 +132,12 @@ class LangflowFirstPassRunner:
                     continue
 
                 ocr_document = self.ocr_node.process_document(record.applicant_id, str(pdf_path))
-                first_pass_signals = self.signals_node.scan_document(ocr_document, context)
+                first_pass_signals = self.signals_node.scan_document(
+                    ocr_document,
+                    context,
+                    claims=claims,
+                    verifier_mode=self.settings.verifier.mode,
+                )
                 engines = set(ocr_document.metadata.get("engines", []))
                 if engines == {"direct_text"}:
                     direct_text_docs += 1
@@ -114,12 +145,14 @@ class LangflowFirstPassRunner:
                     ocr_docs += 1
 
                 if not ocr_document.combined_text and not ocr_document.page_image_paths:
-                    has_claims = any(claims.values())
+                    has_claims = bool(claims.active_signals())
+                    unclear_claims = claims.is_unclear()
+                    needs_review = has_claims or unclear_claims
                     result = candidate_failure_result(
                         job_id=job_id,
                         record=record,
-                        status="OCR_FAILED" if has_claims else "CONFIRMED",
-                        reason="OCR pipeline did not extract usable text or page images from the PDF." if has_claims else "No claimed evidence and OCR output was not needed for this row.",
+                        status="OCR_FAILED" if needs_review else "CONFIRMED",
+                        reason="OCR pipeline did not extract usable text or page images from the PDF." if needs_review else "No claimed evidence and OCR output was not needed for this row.",
                         download_url=fetch_result.get("url"),
                     )
                     result.source_pdf_name = pdf_path.name
@@ -139,6 +172,7 @@ class LangflowFirstPassRunner:
                     ocr_document=ocr_document,
                     first_pass_signals=first_pass_signals,
                     processing_time_seconds=perf_counter() - started,
+                    claims=claims,
                 )
                 evidence_results.append(assessment_result)
                 self.store.save_evidence_result(assessment_result)

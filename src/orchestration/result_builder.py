@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
+from src.extraction.applicant_claims import ApplicantClaims, extract_applicant_claims
 from src.extraction.evidence_models import EvidenceResult
 from src.io.spreadsheet_loader import ApplicantRecord
 from src.rules.document_tags import derive_document_tags
@@ -12,7 +13,6 @@ from src.rules.validators import (
     aggregate_reason_text,
     document_ocr_confidence,
     row_claim_is_married,
-    row_has_oku_claim,
     row_has_postgraduate_claim,
 )
 from src.utils.download_url import normalize_download_url
@@ -33,6 +33,22 @@ SIGNAL_KEYS = [
     "oku_self_or_family",
     "medex_or_other_exam",
 ]
+SIGNAL_EXPORT_KEYS = {
+    "marriage": "marriage",
+    "self_illness": "self_illness",
+    "family_illness": "family_illness",
+    "spouse_location": "spouse_location",
+    "oku_self_or_family": "oku_self_or_family",
+    "medex_or_other_exam": "medex_other_exam",
+}
+SIGNAL_LABELS = {
+    "marriage": "marriage",
+    "self_illness": "self illness",
+    "family_illness": "family illness",
+    "spouse_location": "spouse location",
+    "oku_self_or_family": "OKU self/family",
+    "medex_or_other_exam": "MedEX/other exam",
+}
 PRIMARY_SIGNAL_ORDER = [
     "marriage",
     "spouse_location",
@@ -41,24 +57,6 @@ PRIMARY_SIGNAL_ORDER = [
     "self_illness",
     "family_illness",
 ]
-
-
-def _text(value) -> str:
-    return str(value or "").strip()
-
-
-def _has_meaningful_text(value) -> bool:
-    return _text(value).casefold() not in {"", "0", "tiada", "tidak", "tidak berkenaan", "none", "n/a", "na", "null"}
-
-
-def _numeric_positive(value) -> bool:
-    text = _text(value)
-    if not text:
-        return False
-    try:
-        return float(text) > 0
-    except ValueError:
-        return False
 
 
 def expected_targets(row: dict) -> list[str]:
@@ -100,36 +98,53 @@ def applicant_context(record: ApplicantRecord) -> dict[str, str]:
 
 
 def candidate_claims(row: dict) -> dict[str, bool]:
+    return extract_applicant_claims(row).signal_map()
+
+
+def _default_signal_detail(signal: str, claimed: bool, status: str) -> dict[str, object]:
+    label = SIGNAL_LABELS[signal]
+    if not claimed:
+        summary = "Not claimed; skipped."
+    elif status == "present":
+        summary = f"Supporting {label} evidence was found."
+    elif status == "manual_check":
+        summary = f"Potential {label} evidence was found but remains ambiguous."
+    else:
+        summary = f"No supporting {label} evidence was found."
     return {
-        "marriage": row_claim_is_married(row.get("marital_status")),
-        "self_illness": _has_meaningful_text(row.get("personal_health_condition")) or _has_meaningful_text(row.get("personal_health_details")),
-        "family_illness": any(
-            [
-                _has_meaningful_text(row.get("spouse_health_condition")),
-                _has_meaningful_text(row.get("spouse_health_details")),
-                _numeric_positive(row.get("children_health_issue_score")),
-                _numeric_positive(row.get("parent_health_issue_score")),
-            ]
-        ),
-        "spouse_location": row_claim_is_married(row.get("marital_status"))
-        and any(
-            [
-                _has_meaningful_text(row.get("spouse_employment_status")),
-                _has_meaningful_text(row.get("spouse_job_title")),
-                _has_meaningful_text(row.get("spouse_work_address")),
-                _has_meaningful_text(row.get("spouse_work_state")),
-            ]
-        ),
-        "oku_self_or_family": any(
-            [
-                row_has_oku_claim(row.get("applicant_oku_status")),
-                row_has_oku_claim(row.get("spouse_oku_status")),
-                _numeric_positive(row.get("children_disability_score")),
-                _numeric_positive(row.get("parent_disability_score")),
-            ]
-        ),
-        "medex_or_other_exam": row_has_postgraduate_claim(row.get("postgraduate_status")),
+        "claimed": claimed,
+        "status": status if claimed else "not_present",
+        "proof_found": claimed and status == "present",
+        "verified": claimed and status == "present",
+        "missing_proof": claimed and status != "present",
+        "ambiguous": claimed and status == "manual_check",
+        "low_confidence": False,
+        "supporting_pages": [],
+        "evidence_summary": summary,
+        "confidence": 1.0 if claimed and status == "present" else 0.5 if claimed and status == "manual_check" else 0.0,
     }
+
+
+def _normalize_signal_details(first_pass_signals, claims: ApplicantClaims) -> dict[str, dict[str, object]]:
+    raw_details = dict(first_pass_signals.raw_payload.get("signal_details", {}))
+    claim_map = claims.signal_map()
+    normalized: dict[str, dict[str, object]] = {}
+    for signal in SIGNAL_KEYS:
+        detail = dict(raw_details.get(signal) or {})
+        if not detail:
+            detail = _default_signal_detail(signal, claim_map.get(signal, False), getattr(first_pass_signals, signal))
+        detail["claimed"] = bool(detail.get("claimed", claim_map.get(signal, False)))
+        detail["status"] = str(detail.get("status") or getattr(first_pass_signals, signal) or "not_present")
+        detail["proof_found"] = bool(detail.get("proof_found", detail["claimed"] and detail["status"] == "present"))
+        detail["verified"] = bool(detail.get("verified", detail["proof_found"]))
+        detail["missing_proof"] = bool(detail.get("missing_proof", detail["claimed"] and not detail["proof_found"]))
+        detail["ambiguous"] = bool(detail.get("ambiguous", detail["claimed"] and detail["status"] == "manual_check"))
+        detail["low_confidence"] = bool(detail.get("low_confidence", False))
+        detail["supporting_pages"] = [int(page) for page in detail.get("supporting_pages", []) if str(page).strip()]
+        detail["evidence_summary"] = str(detail.get("evidence_summary") or _default_signal_detail(signal, detail["claimed"], detail["status"])["evidence_summary"])
+        detail["confidence"] = float(detail.get("confidence") or 0.0)
+        normalized[signal] = detail
+    return normalized
 
 
 def primary_signal(signal_statuses: dict[str, str], fallback: str | None = None) -> str:
@@ -142,33 +157,53 @@ def primary_signal(signal_statuses: dict[str, str], fallback: str | None = None)
     return fallback or ""
 
 
-def candidate_outcome(signal_statuses: dict[str, str], claims: dict[str, bool], has_supporting_document: bool) -> tuple[str, str, bool, list[str], list[str], list[str]]:
-    claimed_signals = [key for key, claimed in claims.items() if claimed]
-    present_claims = [key for key in claimed_signals if signal_statuses.get(key) == "present"]
-    ambiguous_claims = [key for key in claimed_signals if signal_statuses.get(key) == "manual_check"]
-    missing_claims = [key for key in claimed_signals if signal_statuses.get(key) == "not_present"]
-    label_map = {
-        "marriage": "marriage",
-        "self_illness": "self illness",
-        "family_illness": "family illness",
-        "spouse_location": "spouse location",
-        "oku_self_or_family": "OKU self/family",
-        "medex_or_other_exam": "MedEX/other exam",
-    }
+def candidate_outcome(
+    signal_details: dict[str, dict[str, object]],
+    claims: ApplicantClaims,
+    has_supporting_document: bool,
+) -> tuple[str, str, bool, list[str], list[str], list[str]]:
+    claimed_signals = [signal for signal, claimed in claims.signal_map().items() if claimed]
+    present_claims = [signal for signal in claimed_signals if bool(signal_details.get(signal, {}).get("verified"))]
+    ambiguous_claims = [
+        signal
+        for signal in claimed_signals
+        if bool(signal_details.get(signal, {}).get("ambiguous")) or bool(signal_details.get(signal, {}).get("low_confidence"))
+    ]
+    missing_claims = [
+        signal
+        for signal in claimed_signals
+        if bool(signal_details.get(signal, {}).get("missing_proof")) and signal not in ambiguous_claims
+    ]
     reasons: list[str] = []
 
+    if claims.is_unclear():
+        unclear = ", ".join(SIGNAL_LABELS.get(signal, signal.replace("_", " ")) for signal in claims.unclear_claims)
+        reasons.append(f"Claim extraction from the spreadsheet is unclear for: {unclear}.")
+
     if claimed_signals and not has_supporting_document:
-        return "DOCUMENT_MISSING", "Claimed evidence exists in the spreadsheet but no supporting PDF was available.", True, present_claims, ambiguous_claims, missing_claims
+        reasons.append("Claimed evidence exists in the spreadsheet but no supporting PDF was available.")
 
     if ambiguous_claims:
-        reasons.append("Claimed evidence is still ambiguous after the second pass: " + ", ".join(label_map[key] for key in ambiguous_claims) + ".")
+        reasons.append(
+            "Claimed evidence is still ambiguous or low confidence after the second pass: "
+            + ", ".join(SIGNAL_LABELS[key] for key in ambiguous_claims)
+            + "."
+        )
     if missing_claims:
-        reasons.append("Claimed evidence is still missing after the second pass: " + ", ".join(label_map[key] for key in missing_claims) + ".")
+        reasons.append(
+            "Claimed evidence is still missing after the second pass: "
+            + ", ".join(SIGNAL_LABELS[key] for key in missing_claims)
+            + "."
+        )
 
     if reasons:
-        return "MANUAL_REVIEW_REQUIRED", " | ".join(reasons), True, present_claims, ambiguous_claims, missing_claims
+        final_status = "DOCUMENT_MISSING" if claimed_signals and not has_supporting_document else "MANUAL_REVIEW_REQUIRED"
+        return final_status, " | ".join(reasons), True, present_claims, ambiguous_claims, missing_claims
 
-    return "CONFIRMED", "All claimed evidence matched the final signal set.", False, present_claims, ambiguous_claims, missing_claims
+    if not claimed_signals:
+        return "CONFIRMED", "No claimed evidence categories required verification.", False, [], [], []
+
+    return "CONFIRMED", "All claimed evidence categories were supported by the uploaded PDF.", False, present_claims, [], []
 
 
 def target_label(target: str) -> str:
@@ -409,13 +444,16 @@ def candidate_result(
     ocr_document,
     first_pass_signals,
     processing_time_seconds: float,
+    claims: ApplicantClaims | None = None,
 ) -> EvidenceResult:
-    claims = candidate_claims(record.canonical)
+    claim_model = claims or extract_applicant_claims(record.canonical)
+    claims_map = claim_model.signal_map()
     signal_statuses = {key: getattr(first_pass_signals, key) for key in SIGNAL_KEYS}
+    signal_details = _normalize_signal_details(first_pass_signals, claim_model)
     has_supporting_document = True
     final_status, final_reason, manual_review, present_claims, ambiguous_claims, missing_claims = candidate_outcome(
-        signal_statuses,
-        claims,
+        signal_details,
+        claim_model,
         has_supporting_document,
     )
     detected_primary_signal = primary_signal(
@@ -449,7 +487,7 @@ def candidate_result(
         evidence_type="bundle",
         ocr_engine=",".join(ocr_document.metadata.get("engines", [])),
         ocr_confidence=document_ocr_confidence(ocr_document),
-        llm_confidence=float(first_pass_signals.raw_payload.get("best_fit_confidence") or 0.0),
+        llm_confidence=max((float(detail.get("confidence") or 0.0) for detail in signal_details.values()), default=0.0),
         extracted_applicant_ic=None,
         extracted_spouse_ic=None,
         extracted_name_fields=[],
@@ -462,13 +500,18 @@ def candidate_result(
         processing_hash=ocr_document.processing_hash,
         matched_fields=present_claims,
         mismatched_fields=missing_claims + ambiguous_claims,
-        snippets=first_pass_signals.reasons[:6],
+        snippets=[str(detail.get("evidence_summary")) for detail in signal_details.values() if detail.get("claimed")][:6],
         llm_json={"first_pass_signals": first_pass_signals.model_dump(mode="json")},
         audit_payload={
             "result_kind": "candidate_assessment",
-            "claims": claims,
+            "verifier_mode": first_pass_signals.raw_payload.get("_verifier_mode", "broad_classifier"),
+            "claims": claims_map,
+            "claim_columns": claim_model.export_claim_columns(),
+            "claim_extraction_unclear": list(claim_model.unclear_claims),
+            "claim_extraction_notes": list(claim_model.notes),
             "first_pass_signals": first_pass_signals.model_dump(mode="json"),
             "final_signal_statuses": signal_statuses,
+            "signal_details": signal_details,
             "detected_primary_signal": detected_primary_signal,
             "present_claims": present_claims,
             "ambiguous_claims": ambiguous_claims,

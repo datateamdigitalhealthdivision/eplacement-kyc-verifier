@@ -30,34 +30,21 @@ def test_build_scoring_sheet_includes_predicted_and_manual_columns(tmp_path: Pat
 
     scoring_df = build_scoring_sheet(decision_df, settings, "job-123")
 
-    assert list(scoring_df.columns) == [
-        "job_id",
-        "vision_model",
-        "secondary_vision_model",
-        "text_model",
-        "applicant_id",
-        "source_pdf_name",
-        "original_pdf_url",
-        "open_original_pdf",
-        "pred_marriage",
-        "pred_self_illness",
-        "pred_family_illness",
-        "pred_spouse_location",
-        "pred_oku_self_or_family",
-        "pred_medex_other_exam",
-        "pred_check_required",
-        "pred_summary",
-        "manual_marriage",
-        "manual_self_illness",
-        "manual_family_illness",
-        "manual_spouse_location",
-        "manual_oku_self_or_family",
-        "manual_medex_other_exam",
-        "manual_check_required",
-        "reviewer_notes",
-    ]
+    assert "pred_marriage" in scoring_df.columns
+    assert "pred_medex_other_exam" in scoring_df.columns
+    assert "claimed_marriage" in scoring_df.columns
+    assert "proof_found_marriage" in scoring_df.columns
+    assert "verified_marriage" in scoring_df.columns
+    assert "missing_proof_marriage" in scoring_df.columns
+    assert "supporting_page_marriage" in scoring_df.columns
+    assert "evidence_summary_marriage" in scoring_df.columns
+    assert "confidence_marriage" in scoring_df.columns
+    assert "manual_marriage" in scoring_df.columns
+    assert "manual_check_required" in scoring_df.columns
+    assert "reviewer_notes" in scoring_df.columns
     assert scoring_df.iloc[0]["pred_marriage"] == "present"
     assert scoring_df.iloc[0]["pred_spouse_location"] == "manual_check"
+    assert bool(scoring_df.iloc[0]["claimed_marriage"]) is False
     assert scoring_df.iloc[0]["manual_marriage"] == ""
     assert scoring_df.iloc[0]["manual_check_required"] == ""
 

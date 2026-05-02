@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+from src.extraction.applicant_claims import ApplicantClaims, extract_applicant_claims
 from src.extraction.evidence_models import FirstPassEvidenceSignals, OCRDocument
 from src.llm.ollama_client import OllamaClient
 from src.llm.parser import parse_model_response
@@ -15,7 +16,7 @@ from src.rules.validators import row_claim_is_married, row_has_oku_claim, row_ha
 from src.settings import AppConfig
 
 
-CACHE_VERSION = "v8"
+CACHE_VERSION = "v11"
 STATUS_PRIORITY = {"not_present": 0, "manual_check": 1, "present": 2}
 SIGNAL_KEYS = [
     "marriage",
@@ -119,7 +120,9 @@ FORCED_GUESS_MANUAL_THRESHOLD = 0.45
 DOCUMENT_GUESS_PRESENT_THRESHOLD = 0.6
 TARGETED_PRESENT_THRESHOLD = 0.55
 TARGETED_MANUAL_THRESHOLD = 0.35
+CLAIM_GUIDED_INITIAL_PAGE_LIMIT = 2
 NEGATIVE_TEXT_VALUES = {"", "0", "tiada", "tidak", "tidak berkenaan", "none", "n/a", "na", "null"}
+SIGNAL_CONFIDENCE_KEYS = {signal: f"{signal}_confidence" for signal in SIGNAL_KEYS}
 
 
 class FirstPassEvidenceScanner:
@@ -132,9 +135,38 @@ class FirstPassEvidenceScanner:
             return None
         return self.llm_client.secondary_vision_model_name()
 
-    def _cache_path(self, processing_hash: str, mode: str, model_name: str | None = None) -> Path:
+    def _cache_path(
+        self,
+        processing_hash: str,
+        mode: str,
+        model_name: str | None = None,
+        claim_key: str | None = None,
+    ) -> Path:
         suffix = f"_{OllamaClient.cache_slug(model_name)}" if model_name else ""
-        return self.settings.paths.llm_json_dir / f"{processing_hash}_first_pass_{CACHE_VERSION}_{mode}{suffix}.json"
+        claim_suffix = f"_{claim_key}" if claim_key else ""
+        return self.settings.paths.llm_json_dir / f"{processing_hash}_first_pass_{CACHE_VERSION}_{mode}{claim_suffix}{suffix}.json"
+
+    @staticmethod
+    def _active_signals(claims: ApplicantClaims | None, verifier_mode: str) -> list[str]:
+        if verifier_mode == "claim_guided_verifier":
+            return claims.active_signals() if claims else []
+        return list(SIGNAL_KEYS)
+
+    @staticmethod
+    def _status_for_unclaimed_signal(signal: str, active_signals: list[str], payload: FirstPassSignalsSchema) -> str:
+        if signal in active_signals:
+            return getattr(payload, signal)
+        return "not_present"
+
+    @staticmethod
+    def _confidence_for_signal(signal: str, active_signals: list[str], payload: FirstPassSignalsSchema) -> float:
+        confidence_key = SIGNAL_CONFIDENCE_KEYS[signal]
+        if signal not in active_signals:
+            return 0.0
+        confidence = float(getattr(payload, confidence_key, 0.0) or 0.0)
+        if confidence <= 0 and getattr(payload, signal) != "not_present" and payload.best_fit_bucket == signal:
+            return float(payload.best_fit_confidence or 0.0)
+        return confidence
 
     @staticmethod
     def _document_images(document: OCRDocument) -> list[str]:
@@ -182,10 +214,13 @@ class FirstPassEvidenceScanner:
         return FirstPassEvidenceSignals.model_validate(payload)
 
     @staticmethod
-    def _aggregate_chunk_results(chunk_results: list[FirstPassEvidenceSignals]) -> FirstPassEvidenceSignals:
+    def _aggregate_chunk_results(chunk_results: list[FirstPassEvidenceSignals], active_signals: list[str]) -> FirstPassEvidenceSignals:
         payload = FirstPassEvidenceSignals().model_dump(mode="json")
         reasons: list[str] = []
         for key in SIGNAL_KEYS:
+            if key not in active_signals:
+                payload[key] = "not_present"
+                continue
             present_count = sum(1 for result in chunk_results if getattr(result, key) == "present")
             manual_count = sum(1 for result in chunk_results if getattr(result, key) == "manual_check")
             if present_count >= 1:
@@ -259,7 +294,7 @@ class FirstPassEvidenceScanner:
         }
 
     @staticmethod
-    def _page_label_payload(page_number: int, payload: FirstPassSignalsSchema) -> dict[str, object]:
+    def _page_label_payload(page_number: int, payload: FirstPassSignalsSchema, active_signals: list[str]) -> dict[str, object]:
         result = {
             "page": page_number,
             "best_fit_bucket": payload.best_fit_bucket,
@@ -268,7 +303,8 @@ class FirstPassEvidenceScanner:
             "subject_role_confidence": payload.subject_role_confidence,
         }
         for key in SIGNAL_KEYS:
-            result[key] = getattr(payload, key)
+            result[key] = FirstPassEvidenceScanner._status_for_unclaimed_signal(key, active_signals, payload)
+            result[SIGNAL_CONFIDENCE_KEYS[key]] = FirstPassEvidenceScanner._confidence_for_signal(key, active_signals, payload)
         result["reasons"] = list(payload.reasons)
         return result
 
@@ -327,12 +363,13 @@ class FirstPassEvidenceScanner:
         cls,
         chunk_result: FirstPassEvidenceSignals,
         payload: FirstPassSignalsSchema,
+        active_signals: list[str],
     ) -> FirstPassEvidenceSignals:
         if not cls._all_not_present(chunk_result):
             return chunk_result
         bucket = payload.best_fit_bucket
         status = cls._forced_guess_status(payload.best_fit_confidence)
-        if not bucket or status == "not_present":
+        if not bucket or status == "not_present" or bucket not in active_signals:
             return chunk_result
         promoted = chunk_result.model_dump(mode="json")
         promoted[bucket] = status
@@ -351,6 +388,7 @@ class FirstPassEvidenceScanner:
         cls,
         result: FirstPassEvidenceSignals,
         chunk_payloads: list[dict[str, object]],
+        active_signals: list[str],
     ) -> FirstPassEvidenceSignals:
         payload = result.model_dump(mode="json")
         guess_counts = {key: 0 for key in SIGNAL_KEYS}
@@ -367,6 +405,8 @@ class FirstPassEvidenceScanner:
             return result
         required_count = max(2, (total_chunks + 1) // 2)
         for key in SIGNAL_KEYS:
+            if key not in active_signals:
+                continue
             if payload.get(key) != "not_present":
                 continue
             count = guess_counts[key]
@@ -524,32 +564,54 @@ class FirstPassEvidenceScanner:
             payload["reasons"] = list(dict.fromkeys([*result.reasons, "Routine medical examination pages were excluded from MedEX or other exam."]))
         return FirstPassEvidenceSignals.model_validate(payload)
 
-    def _heuristic_scan(self, document: OCRDocument, applicant_context: dict[str, str] | None = None) -> FirstPassEvidenceSignals:
+    def _heuristic_scan(
+        self,
+        document: OCRDocument,
+        applicant_context: dict[str, str] | None = None,
+        active_signals: list[str] | None = None,
+    ) -> FirstPassEvidenceSignals:
         text = document.combined_text or ""
         context = applicant_context or {}
+        active = set(active_signals or SIGNAL_KEYS)
         medical = self._matches(text, MEDICAL_PATTERNS)
         family_terms = self._matches(text, FAMILY_PATTERNS)
         applicant_match = self._contains_identifier(text, context.get("applicant_id")) or self._contains_name(text, context.get("applicant_name"))
         spouse_match = self._contains_identifier(text, context.get("spouse_id")) or self._contains_name(text, context.get("spouse_name"))
         statuses = {
-            "marriage": "present" if self._matches(text, HEURISTIC_PATTERNS["marriage"]) else "not_present",
-            "self_illness": "present" if medical and applicant_match else "not_present",
-            "family_illness": "present" if medical and (spouse_match or family_terms) else "not_present",
-            "spouse_location": "present" if self._matches(text, HEURISTIC_PATTERNS["spouse_location"]) and (spouse_match or family_terms or self._matches(text, HEURISTIC_PATTERNS["marriage"])) else "not_present",
-            "oku_self_or_family": "present" if self._matches(text, HEURISTIC_PATTERNS["oku_self_or_family"]) else "not_present",
-            "medex_or_other_exam": "present" if self._matches(text, HEURISTIC_PATTERNS["medex_or_other_exam"]) else "not_present",
+            "marriage": "present" if "marriage" in active and self._matches(text, HEURISTIC_PATTERNS["marriage"]) else "not_present",
+            "self_illness": "present" if "self_illness" in active and medical and applicant_match else "not_present",
+            "family_illness": "present" if "family_illness" in active and medical and (spouse_match or family_terms) else "not_present",
+            "spouse_location": "present" if "spouse_location" in active and self._matches(text, HEURISTIC_PATTERNS["spouse_location"]) and (spouse_match or family_terms or self._matches(text, HEURISTIC_PATTERNS["marriage"])) else "not_present",
+            "oku_self_or_family": "present" if "oku_self_or_family" in active and self._matches(text, HEURISTIC_PATTERNS["oku_self_or_family"]) else "not_present",
+            "medex_or_other_exam": "present" if "medex_or_other_exam" in active and self._matches(text, HEURISTIC_PATTERNS["medex_or_other_exam"]) else "not_present",
         }
         reasons = [f"Heuristic matched {key.replace('_', ' ')} evidence." for key, value in statuses.items() if value == "present"]
         return FirstPassEvidenceSignals(**statuses, reasons=reasons, raw_payload={"_method": "heuristic", "_cache_version": CACHE_VERSION})
 
-    def _overview_scan(self, chunk_payloads: list[dict[str, object]], applicant_context: dict[str, str] | None = None) -> FirstPassEvidenceSignals:
+    def _overview_scan(
+        self,
+        chunk_payloads: list[dict[str, object]],
+        applicant_context: dict[str, str] | None = None,
+        *,
+        verifier_mode: str,
+        active_signals: list[str],
+    ) -> FirstPassEvidenceSignals:
         if not (self.llm_client and self.llm_client.is_enabled() and chunk_payloads):
+            return self._empty_result()
+        if verifier_mode == "claim_guided_verifier":
             return self._empty_result()
         overview_text = "\n".join(
             f"Pages {chunk.get('pages')}: {json.dumps(chunk, ensure_ascii=True)}" for chunk in chunk_payloads
         )
         try:
-            response = self.llm_client.generate(first_pass_signals_prompt(overview_text, applicant_context=applicant_context))
+            response = self.llm_client.generate(
+                first_pass_signals_prompt(
+                    overview_text,
+                    applicant_context=applicant_context,
+                    verifier_mode=verifier_mode,
+                    claimed_signals=active_signals,
+                )
+            )
             payload = parse_model_response(response, FirstPassSignalsSchema)
             result = FirstPassEvidenceSignals(**payload.model_dump())
             result.raw_payload = {"_method": "ollama_text_overview", "_cache_version": CACHE_VERSION, **payload.model_dump(mode="json")}
@@ -564,14 +626,20 @@ class FirstPassEvidenceScanner:
         images: list[str],
         chunk_payloads: list[dict[str, object]],
         current_result: FirstPassEvidenceSignals,
+        *,
+        claims: ApplicantClaims | None,
+        verifier_mode: str,
+        active_signals: list[str],
     ) -> tuple[FirstPassEvidenceSignals, dict[str, dict[str, object]]]:
         if not (self.llm_client and self.llm_client.is_vision_enabled() and images):
             return current_result, {}
-        claims = self._context_claims(applicant_context)
+        claims_map = claims.signal_map() if claims else self._context_claims(applicant_context)
         recovery_payload: dict[str, dict[str, object]] = {}
         updated_payload = current_result.model_dump(mode="json")
 
-        for signal, claimed in claims.items():
+        for signal, claimed in claims_map.items():
+            if signal not in active_signals:
+                continue
             if not claimed or updated_payload.get(signal) == "present":
                 continue
             candidate_indexes = self._candidate_pages_for_signal(signal, chunk_payloads)
@@ -588,10 +656,12 @@ class FirstPassEvidenceScanner:
                             include_images=True,
                             page_range=self._page_range(document, page_index, page_index + 1),
                             focus_signal=signal,
+                            verifier_mode=verifier_mode,
+                            claimed_signals=active_signals,
                         ),
                         image_paths=[images[page_index]],
                     )
-                    page_payload = self._page_label_payload(page_number, payload)
+                    page_payload = self._page_label_payload(page_number, payload, active_signals)
                     page_payload["models_used"] = models_used
                     page_payloads.append(page_payload)
                 except Exception:  # noqa: BLE001
@@ -611,13 +681,191 @@ class FirstPassEvidenceScanner:
 
         return FirstPassEvidenceSignals.model_validate(updated_payload), recovery_payload
 
-    def scan(self, document: OCRDocument, applicant_context: dict[str, str] | None = None) -> FirstPassEvidenceSignals:
+    def _signal_page_payloads(
+        self,
+        signal: str,
+        page_labels: list[dict[str, object]],
+        recovery_payload: dict[str, dict[str, object]],
+    ) -> list[dict[str, object]]:
+        payloads: list[dict[str, object]] = []
+        for payload in page_labels:
+            if payload.get(signal) != "not_present" or payload.get("best_fit_bucket") == signal:
+                payloads.append(payload)
+        for payload in recovery_payload.get(signal, {}).get("page_labels", []):
+            if payload.get(signal) != "not_present" or payload.get("best_fit_bucket") == signal:
+                payloads.append(payload)
+        return payloads
+
+    def _signal_supporting_pages(
+        self,
+        signal: str,
+        page_labels: list[dict[str, object]],
+        recovery_payload: dict[str, dict[str, object]],
+    ) -> list[int]:
+        pages: list[int] = []
+        for payload in self._signal_page_payloads(signal, page_labels, recovery_payload):
+            page = payload.get("page")
+            if isinstance(page, int) and page not in pages:
+                pages.append(page)
+        return pages
+
+    def _signal_confidence(
+        self,
+        signal: str,
+        status: str,
+        *,
+        page_labels: list[dict[str, object]],
+        recovery_payload: dict[str, dict[str, object]],
+        fallback_payload: dict[str, object] | None = None,
+    ) -> float:
+        confidences: list[float] = []
+        for payload in self._signal_page_payloads(signal, page_labels, recovery_payload):
+            confidence = float(payload.get(SIGNAL_CONFIDENCE_KEYS[signal]) or 0.0)
+            if confidence <= 0 and payload.get("best_fit_bucket") == signal and payload.get(signal) != "not_present":
+                confidence = float(payload.get("best_fit_confidence") or 0.0)
+            if confidence > 0:
+                confidences.append(confidence)
+        if fallback_payload:
+            fallback_confidence = float(fallback_payload.get(SIGNAL_CONFIDENCE_KEYS[signal]) or 0.0)
+            if fallback_confidence <= 0 and fallback_payload.get("best_fit_bucket") == signal and status != "not_present":
+                fallback_confidence = float(fallback_payload.get("best_fit_confidence") or 0.0)
+            if fallback_confidence > 0:
+                confidences.append(fallback_confidence)
+        if status == "present" and not confidences:
+            return 1.0
+        if status == "manual_check" and not confidences:
+            return 0.5
+        return max(confidences, default=0.0)
+
+    def _signal_summary(
+        self,
+        signal: str,
+        *,
+        claimed: bool,
+        status: str,
+        page_labels: list[dict[str, object]],
+        recovery_payload: dict[str, dict[str, object]],
+    ) -> str:
+        label = signal.replace("_", " ")
+        if not claimed:
+            return "Not claimed; skipped."
+        reasons: list[str] = []
+        for payload in self._signal_page_payloads(signal, page_labels, recovery_payload):
+            for reason in payload.get("reasons", []):
+                text = str(reason).strip()
+                if text and text not in reasons:
+                    reasons.append(text)
+        for reason in recovery_payload.get(signal, {}).get("reasons", []):
+            text = str(reason).strip()
+            if text and text not in reasons:
+                reasons.append(text)
+        if reasons:
+            return " | ".join(reasons)
+        if status == "present":
+            return f"Supporting {label} evidence was found."
+        if status == "manual_check":
+            return f"Potential {label} evidence was found but remains ambiguous."
+        return f"No supporting {label} evidence was found."
+
+    def _build_signal_details(
+        self,
+        result: FirstPassEvidenceSignals,
+        *,
+        claims: ApplicantClaims | None,
+        verifier_mode: str,
+        page_labels: list[dict[str, object]],
+        recovery_payload: dict[str, dict[str, object]],
+        fallback_payload: dict[str, object] | None = None,
+    ) -> dict[str, dict[str, object]]:
+        claim_map = claims.signal_map() if claims else {signal: verifier_mode != "claim_guided_verifier" for signal in SIGNAL_KEYS}
+        threshold = float(self.settings.verifier.present_confidence_threshold)
+        details: dict[str, dict[str, object]] = {}
+        for signal in SIGNAL_KEYS:
+            status = getattr(result, signal)
+            claimed = bool(claim_map.get(signal, False))
+            supporting_pages = self._signal_supporting_pages(signal, page_labels, recovery_payload) if claimed else []
+            confidence = self._signal_confidence(
+                signal,
+                status,
+                page_labels=page_labels,
+                recovery_payload=recovery_payload,
+                fallback_payload=fallback_payload,
+            ) if claimed else 0.0
+            proof_found = claimed and status == "present" and confidence >= threshold
+            ambiguous = claimed and status == "manual_check"
+            low_confidence = claimed and status == "present" and confidence < threshold
+            details[signal] = {
+                "claimed": claimed,
+                "status": status if claimed else "not_present",
+                "proof_found": proof_found,
+                "verified": proof_found,
+                "missing_proof": claimed and not proof_found,
+                "ambiguous": ambiguous,
+                "low_confidence": low_confidence,
+                "supporting_pages": supporting_pages,
+                "evidence_summary": self._signal_summary(
+                    signal,
+                    claimed=claimed,
+                    status=status,
+                    page_labels=page_labels,
+                    recovery_payload=recovery_payload,
+                ),
+                "confidence": round(confidence, 3),
+            }
+        return details
+
+    def _all_active_signals_verified(self, signal_details: dict[str, dict[str, object]], active_signals: list[str]) -> bool:
+        if not active_signals:
+            return True
+        threshold = float(self.settings.verifier.early_stop_confidence_threshold)
+        for signal in active_signals:
+            detail = signal_details.get(signal, {})
+            if not detail.get("claimed"):
+                continue
+            if not detail.get("proof_found"):
+                return False
+            if float(detail.get("confidence") or 0.0) < threshold:
+                return False
+        return True
+
+    def scan(
+        self,
+        document: OCRDocument,
+        applicant_context: dict[str, str] | None = None,
+        claims: ApplicantClaims | None = None,
+        verifier_mode: str = "broad_classifier",
+    ) -> FirstPassEvidenceSignals:
+        claims = claims or (extract_applicant_claims(applicant_context or {}) if applicant_context else None)
+        active_signals = self._active_signals(claims, verifier_mode)
+        claim_key = "all" if verifier_mode != "claim_guided_verifier" else "-".join(active_signals) if active_signals else "none"
         desired_mode, model_name = self._desired_mode(document)
-        cache_path = self._cache_path(document.processing_hash, desired_mode, model_name)
+        cache_path = self._cache_path(document.processing_hash, desired_mode, model_name, claim_key=claim_key)
         if cache_path.exists():
             return FirstPassEvidenceSignals.model_validate(json.loads(cache_path.read_text(encoding="utf-8")))
 
-        heuristic = self._heuristic_scan(document, applicant_context)
+        if verifier_mode == "claim_guided_verifier" and not active_signals:
+            skipped = self._empty_result()
+            skipped.raw_payload = {
+                "_method": "claim_guided_skip",
+                "_cache_version": CACHE_VERSION,
+                "_verifier_mode": verifier_mode,
+                "claims": claims.signal_map() if claims else {},
+                "claim_extraction": {
+                    "unclear_claims": list(claims.unclear_claims) if claims else [],
+                    "notes": list(claims.notes) if claims else [],
+                },
+            }
+            skipped.raw_payload["signal_details"] = self._build_signal_details(
+                skipped,
+                claims=claims,
+                verifier_mode=verifier_mode,
+                page_labels=[],
+                recovery_payload={},
+            )
+            cache_path.write_text(skipped.model_dump_json(indent=2) + "\n", encoding="utf-8")
+            return skipped
+
+        heuristic = self._heuristic_scan(document, applicant_context, active_signals=active_signals)
         result = heuristic
         images = self._document_images(document)
 
@@ -626,7 +874,11 @@ class FirstPassEvidenceScanner:
             chunk_results: list[FirstPassEvidenceSignals] = []
             chunk_payloads: list[dict[str, object]] = []
             page_labels: list[dict[str, object]] = []
-            for start in range(0, len(images), chunk_size):
+            recovery_payload: dict[str, dict[str, object]] = {}
+            initial_image_count = len(images)
+            if verifier_mode == "claim_guided_verifier":
+                initial_image_count = min(len(images), CLAIM_GUIDED_INITIAL_PAGE_LIMIT)
+            for start in range(0, initial_image_count, chunk_size):
                 stop = start + chunk_size
                 chunk_images = images[start:stop]
                 if not chunk_images:
@@ -638,13 +890,16 @@ class FirstPassEvidenceScanner:
                             applicant_context=applicant_context,
                             include_images=True,
                             page_range=self._page_range(document, start, stop),
+                            verifier_mode=verifier_mode,
+                            claimed_signals=active_signals,
                         ),
                         image_paths=chunk_images,
+                        run_secondary_on_weak_primary=verifier_mode != "claim_guided_verifier",
                     )
                     chunk_result = FirstPassEvidenceSignals(**payload.model_dump())
-                    chunk_result = self._apply_chunk_guess_fallback(chunk_result, payload)
+                    chunk_result = self._apply_chunk_guess_fallback(chunk_result, payload, active_signals)
                     chunk_results.append(chunk_result)
-                    page_label = self._page_label_payload(start + 1, payload)
+                    page_label = self._page_label_payload(start + 1, payload, active_signals)
                     page_label["models_used"] = models_used
                     page_labels.append(page_label)
                     chunk_payloads.append(
@@ -656,41 +911,125 @@ class FirstPassEvidenceScanner:
                     )
                 except Exception:  # noqa: BLE001
                     continue
+                if verifier_mode == "claim_guided_verifier":
+                    interim = self._aggregate_chunk_results(chunk_results, active_signals)
+                    interim = self._apply_document_guess_fallback(interim, chunk_payloads, active_signals)
+                    interim_details = self._build_signal_details(
+                        interim,
+                        claims=claims,
+                        verifier_mode=verifier_mode,
+                        page_labels=page_labels,
+                        recovery_payload={},
+                    )
+                    if self._all_active_signals_verified(interim_details, active_signals):
+                        break
             if chunk_payloads:
-                llm_result = self._aggregate_chunk_results(chunk_results)
-                llm_result = self._apply_document_guess_fallback(llm_result, chunk_payloads)
-                overview_result = self._overview_scan(chunk_payloads, applicant_context=applicant_context)
+                llm_result = self._aggregate_chunk_results(chunk_results, active_signals)
+                llm_result = self._apply_document_guess_fallback(llm_result, chunk_payloads, active_signals)
+                overview_result = self._overview_scan(
+                    chunk_payloads,
+                    applicant_context=applicant_context,
+                    verifier_mode=verifier_mode,
+                    active_signals=active_signals,
+                )
                 llm_result = self._merge_signals(llm_result, overview_result)
                 result = self._merge_signals(heuristic, llm_result)
                 result = self._post_process_result(result, document, chunk_payloads)
-                result, recovery_payload = self._claim_recovery_scan(document, applicant_context, images, chunk_payloads, result)
+                result, recovery_payload = self._claim_recovery_scan(
+                    document,
+                    applicant_context,
+                    images,
+                    chunk_payloads,
+                    result,
+                    claims=claims,
+                    verifier_mode=verifier_mode,
+                    active_signals=active_signals,
+                )
+                signal_details = self._build_signal_details(
+                    result,
+                    claims=claims,
+                    verifier_mode=verifier_mode,
+                    page_labels=page_labels,
+                    recovery_payload=recovery_payload,
+                )
                 result.raw_payload = {
                     "_method": desired_mode,
                     "_model": self.llm_client.vision_model_name(),
                     "_secondary_model": self._secondary_model_name(),
                     "_cache_models": model_name,
                     "_cache_version": CACHE_VERSION,
+                    "_verifier_mode": verifier_mode,
                     "chunks": chunk_payloads,
                     "page_labels": page_labels,
-                    "claims": self._context_claims(applicant_context),
+                    "claims": claims.signal_map() if claims else self._context_claims(applicant_context),
+                    "claim_extraction": {
+                        "unclear_claims": list(claims.unclear_claims) if claims else [],
+                        "notes": list(claims.notes) if claims else [],
+                    },
+                    "active_signals": active_signals,
+                    "signal_details": signal_details,
                     "claim_recovery": recovery_payload,
                     "overview": overview_result.raw_payload,
                 }
         elif desired_mode == "ollama_text":
             try:
-                response = self.llm_client.generate(first_pass_signals_prompt(document.combined_text, applicant_context=applicant_context))
+                response = self.llm_client.generate(
+                    first_pass_signals_prompt(
+                        document.combined_text,
+                        applicant_context=applicant_context,
+                        verifier_mode=verifier_mode,
+                        claimed_signals=active_signals,
+                    )
+                )
                 payload = parse_model_response(response, FirstPassSignalsSchema)
                 llm_result = FirstPassEvidenceSignals(**payload.model_dump())
                 result = self._merge_signals(heuristic, llm_result)
+                signal_details = self._build_signal_details(
+                    result,
+                    claims=claims,
+                    verifier_mode=verifier_mode,
+                    page_labels=[],
+                    recovery_payload={},
+                    fallback_payload=payload.model_dump(mode="json"),
+                )
                 result.raw_payload = {
                     "_method": desired_mode,
                     "_model": model_name,
                     "_cache_version": CACHE_VERSION,
+                    "_verifier_mode": verifier_mode,
+                    "claims": claims.signal_map() if claims else self._context_claims(applicant_context),
+                    "claim_extraction": {
+                        "unclear_claims": list(claims.unclear_claims) if claims else [],
+                        "notes": list(claims.notes) if claims else [],
+                    },
+                    "active_signals": active_signals,
+                    "signal_details": signal_details,
                     **payload.model_dump(mode="json"),
                 }
             except Exception:  # noqa: BLE001
                 pass
 
-        if desired_mode == "heuristic" or result.raw_payload.get("_method") == desired_mode:
+        if desired_mode == "heuristic" and not result.raw_payload:
+            result.raw_payload = {
+                "_method": "heuristic",
+                "_cache_version": CACHE_VERSION,
+                "_verifier_mode": verifier_mode,
+                "claims": claims.signal_map() if claims else self._context_claims(applicant_context),
+                "claim_extraction": {
+                    "unclear_claims": list(claims.unclear_claims) if claims else [],
+                    "notes": list(claims.notes) if claims else [],
+                },
+                "active_signals": active_signals,
+            }
+        if "signal_details" not in result.raw_payload:
+            result.raw_payload["signal_details"] = self._build_signal_details(
+                result,
+                claims=claims,
+                verifier_mode=verifier_mode,
+                page_labels=list(result.raw_payload.get("page_labels", [])),
+                recovery_payload=dict(result.raw_payload.get("claim_recovery", {})),
+                fallback_payload=result.raw_payload,
+            )
+        if desired_mode == "heuristic" or result.raw_payload.get("_method") in {desired_mode, "claim_guided_skip"}:
             cache_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
         return result

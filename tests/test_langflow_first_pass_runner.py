@@ -48,3 +48,26 @@ def test_langflow_first_pass_runner_smoke_run(tmp_path: Path) -> None:
     assert merged_df.loc[0, "KYC_UPLOADED_DOC_TYPE"] == "marriage"
     assert merged_df.loc[0, "KYC_UPLOADED_DOC_STATUS"] == "CONFIRMED"
     assert merged_df.loc[0, "KYC_MARRIAGE_STATUS"] == "CONFIRMED"
+
+
+def test_langflow_first_pass_runner_skips_unclaimed_rows_in_claim_guided_mode(tmp_path: Path) -> None:
+    settings = make_test_settings(tmp_path)
+    applicant_csv = settings.paths.applicants_dir / "applicants.csv"
+    applicant_csv.write_text(
+        "NO KP,applicant_name,MARITAL_STATUS,POSTGRADUATE_PAPER_STATUS,PERSONAL_HEALTH_CONDITION,Sheet1.DownloadURL\n"
+        "950101145678,NURUL HANANI,BUJANG,Tidak Berkenaan,Tiada,\n",
+        encoding="utf-8",
+    )
+
+    store = SQLiteStore(settings.paths.db_path)
+    runner = LangflowFirstPassRunner(settings, store, OllamaClient(settings))
+    job = store.create_job(str(applicant_csv), str(settings.paths.pdf_dir), settings.model_dump(mode="json"))
+    exports = runner.execute_job(
+        job.job_id,
+        RunJobRequest(applicant_path=str(applicant_csv), pdf_directory=str(settings.paths.pdf_dir), auto_download=False),
+    )
+
+    assert exports is not None
+    validation_df = pd.read_csv(exports.validation_csv)
+    assert validation_df.loc[0, "final_status"] == "CONFIRMED"
+    assert validation_df.loc[0, "final_reason"] == "No claimed evidence categories required verification."

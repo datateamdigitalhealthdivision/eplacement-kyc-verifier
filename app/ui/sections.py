@@ -58,7 +58,7 @@ def render_upload_section() -> None:
 
 def render_run_section() -> None:
     st.subheader("2. Run")
-    if st.button("Run First Pass", width="stretch"):
+    if st.button("Run Claim-Guided Verifier", width="stretch"):
         applicant_path = str(st.session_state.get("applicant_path", "")).strip()
         pdf_directory = str(st.session_state.get("pdf_directory", SETTINGS.paths.pdf_dir))
         auto_download = bool(st.session_state.get("auto_download", True))

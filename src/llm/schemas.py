@@ -61,11 +61,17 @@ class GenericExtractionSchema(BaseModel):
 
 class FirstPassSignalsSchema(BaseModel):
     marriage: Literal["present", "not_present", "manual_check"] = "not_present"
+    marriage_confidence: float = 0.0
     self_illness: Literal["present", "not_present", "manual_check"] = "not_present"
+    self_illness_confidence: float = 0.0
     family_illness: Literal["present", "not_present", "manual_check"] = "not_present"
+    family_illness_confidence: float = 0.0
     spouse_location: Literal["present", "not_present", "manual_check"] = "not_present"
+    spouse_location_confidence: float = 0.0
     oku_self_or_family: Literal["present", "not_present", "manual_check"] = "not_present"
+    oku_self_or_family_confidence: float = 0.0
     medex_or_other_exam: Literal["present", "not_present", "manual_check"] = "not_present"
+    medex_or_other_exam_confidence: float = 0.0
     best_fit_bucket: Literal[
         "marriage",
         "self_illness",

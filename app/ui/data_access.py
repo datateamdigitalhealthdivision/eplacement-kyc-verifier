@@ -114,9 +114,6 @@ def decision_dataframe(bundle: Any) -> pd.DataFrame | None:
     if not path.exists():
         return None
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
-    for column in TICK_COLUMNS:
-        if column in df.columns and df[column].isin(STATUS_VALUES).any():
-            df[column] = df[column].map(lambda value: "?" if str(value).strip().casefold() == "present" else "")
     columns = [
         column
         for column in [

@@ -33,6 +33,11 @@ langflow:
   base_url: http://localhost:7860
   enabled: true
 
+verifier:
+  mode: claim_guided_verifier
+  present_confidence_threshold: 0.65
+  early_stop_confidence_threshold: 0.75
+
 batch:
   concurrency: 2
   retry_count: 2

@@ -150,6 +150,9 @@ def _normalize_payload(payload: dict[str, Any], overrides: dict[str, Any] | None
         normalized["best_fit_confidence"] = _coerce_confidence(normalized.get("best_fit_confidence"))
     if "subject_role_confidence" in normalized:
         normalized["subject_role_confidence"] = _coerce_confidence(normalized.get("subject_role_confidence"))
+    for key in list(normalized):
+        if key.endswith("_confidence") and key not in {"confidence", "extraction_confidence", "best_fit_confidence", "subject_role_confidence"}:
+            normalized[key] = _coerce_confidence(normalized.get(key))
     if "page_refs" in normalized:
         normalized["page_refs"] = _coerce_page_refs(normalized.get("page_refs"))
     if "reasons" in normalized:

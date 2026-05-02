@@ -70,6 +70,8 @@ def first_pass_signals_prompt(
     include_images: bool = False,
     page_range: str | None = None,
     focus_signal: str | None = None,
+    verifier_mode: str = "broad_classifier",
+    claimed_signals: list[str] | None = None,
 ) -> str:
     vision_hint = (
         "You are also given page images from a PDF bundle. A single PDF may contain multiple different documents. "
@@ -123,12 +125,27 @@ def first_pass_signals_prompt(
         if focus_signal
         else ""
     )
+    active_signals = claimed_signals or []
+    claim_guided_hint = ""
+    if verifier_mode == "claim_guided_verifier":
+        if active_signals:
+            claim_guided_hint = (
+                "You are not classifying the full PDF. You are only verifying whether the applicant's declared claims are supported by the uploaded PDF. "
+                "Only check the evidence categories that were claimed in the form. Do not infer, classify, or label unclaimed categories.\n"
+                f"CLAIMED_CATEGORIES: {json.dumps(active_signals, ensure_ascii=True)}\n"
+                "For every unclaimed category, return status not_present and confidence 0.\n"
+            )
+        else:
+            claim_guided_hint = (
+                "The applicant did not claim any target evidence category. Return not_present with confidence 0 for all categories and do not infer extra categories.\n"
+            )
     return (
         "You are doing a first-pass evidence scan for KYC review.\n"
         f"{vision_hint}"
         f"{page_hint}"
         f"{context_hint}"
         f"{focus_hint}"
+        f"{claim_guided_hint}"
         "Do not force the whole PDF into one main document type. Instead, decide whether each evidence bucket is present, not_present, or manual_check based on anything visible in the supplied pages.\n"
         "Use present when the evidence is clearly visible. Use not_present when there is no sign of it. Use manual_check only when there is a possible signal but it is too ambiguous to call present.\n"
         "Use manual_check sparingly. If the page is generic, weak, or not clearly about the target evidence, prefer not_present.\n"
@@ -148,7 +165,7 @@ def first_pass_signals_prompt(
         "- If the bundle clearly shows both applicant illness and family illness on different pages, both can be present.\n"
         "- If the medical pages point to only one person and that person is the spouse or family member, do not also mark self_illness.\n"
         "- If marriage evidence exists elsewhere in the bundle, that can help confirm spouse context for spouse_location, but it is not required.\n"
-        "Return JSON only with keys marriage, self_illness, family_illness, spouse_location, oku_self_or_family, medex_or_other_exam, best_fit_bucket, best_fit_confidence, subject_role, subject_role_confidence, reasons.\n\n"
+        "Return JSON only with keys marriage, marriage_confidence, self_illness, self_illness_confidence, family_illness, family_illness_confidence, spouse_location, spouse_location_confidence, oku_self_or_family, oku_self_or_family_confidence, medex_or_other_exam, medex_or_other_exam_confidence, best_fit_bucket, best_fit_confidence, subject_role, subject_role_confidence, reasons.\n\n"
         "OCR_TEXT:\n"
         f"{text[:12000]}"
     )

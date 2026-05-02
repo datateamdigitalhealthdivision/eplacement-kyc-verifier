@@ -1,4 +1,4 @@
-"""Build and write a manual scoring sheet for model evaluation."""
+"""Build and write a manual scoring sheet for claim-guided model evaluation."""
 
 from __future__ import annotations
 
@@ -12,22 +12,15 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from src.settings import AppConfig
 
 
-PREDICTED_SIGNAL_COLUMNS = [
-    "marriage_status",
-    "self_illness_status",
-    "family_illness_status",
-    "spouse_location_status",
-    "oku_self_or_family_status",
-    "medex_other_exam_status",
+SIGNAL_SUFFIXES = [
+    "marriage",
+    "self_illness",
+    "family_illness",
+    "spouse_location",
+    "oku_self_or_family",
+    "medex_other_exam",
 ]
-MANUAL_SIGNAL_COLUMNS = [
-    "manual_marriage",
-    "manual_self_illness",
-    "manual_family_illness",
-    "manual_spouse_location",
-    "manual_oku_self_or_family",
-    "manual_medex_other_exam",
-]
+MANUAL_SIGNAL_COLUMNS = [f"manual_{suffix}" for suffix in SIGNAL_SUFFIXES]
 MANUAL_SIGNAL_OPTIONS = ["present", "not_present"]
 MANUAL_CHECK_OPTIONS = ["check", "no_check"]
 
@@ -35,34 +28,31 @@ MANUAL_CHECK_OPTIONS = ["check", "no_check"]
 def build_scoring_sheet(decision_df: pd.DataFrame, settings: AppConfig, job_id: str) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for _, row in decision_df.iterrows():
-        rows.append(
-            {
-                "job_id": job_id,
-                "vision_model": settings.ollama.image_model,
-                "secondary_vision_model": settings.ollama.secondary_image_model or "",
-                "text_model": settings.ollama.model,
-                "applicant_id": row.get("applicant_id", ""),
-                "source_pdf_name": row.get("source_pdf_name", ""),
-                "original_pdf_url": row.get("original_pdf_url", ""),
-                "open_original_pdf": row.get("open_original_pdf", ""),
-                "pred_marriage": row.get("marriage_status", ""),
-                "pred_self_illness": row.get("self_illness_status", ""),
-                "pred_family_illness": row.get("family_illness_status", ""),
-                "pred_spouse_location": row.get("spouse_location_status", ""),
-                "pred_oku_self_or_family": row.get("oku_self_or_family_status", ""),
-                "pred_medex_other_exam": row.get("medex_other_exam_status", ""),
-                "pred_check_required": row.get("check_required", ""),
-                "pred_summary": row.get("summary", ""),
-                "manual_marriage": "",
-                "manual_self_illness": "",
-                "manual_family_illness": "",
-                "manual_spouse_location": "",
-                "manual_oku_self_or_family": "",
-                "manual_medex_other_exam": "",
-                "manual_check_required": "",
-                "reviewer_notes": "",
-            }
-        )
+        scoring_row: dict[str, object] = {
+            "job_id": job_id,
+            "vision_model": settings.ollama.image_model,
+            "secondary_vision_model": settings.ollama.secondary_image_model or "",
+            "text_model": settings.ollama.model,
+            "applicant_id": row.get("applicant_id", ""),
+            "source_pdf_name": row.get("source_pdf_name", ""),
+            "original_pdf_url": row.get("original_pdf_url", ""),
+            "open_original_pdf": row.get("open_original_pdf", ""),
+            "pred_check_required": row.get("check_required", ""),
+            "pred_summary": row.get("summary", ""),
+        }
+        for suffix in SIGNAL_SUFFIXES:
+            scoring_row[f"pred_{suffix}"] = row.get(f"{suffix}_status", "")
+            scoring_row[f"claimed_{suffix}"] = row.get(f"claimed_{suffix}", False)
+            scoring_row[f"proof_found_{suffix}"] = row.get(f"proof_found_{suffix}", False)
+            scoring_row[f"verified_{suffix}"] = row.get(f"verified_{suffix}", False)
+            scoring_row[f"missing_proof_{suffix}"] = row.get(f"missing_proof_{suffix}", False)
+            scoring_row[f"supporting_page_{suffix}"] = row.get(f"supporting_page_{suffix}", "")
+            scoring_row[f"evidence_summary_{suffix}"] = row.get(f"evidence_summary_{suffix}", "")
+            scoring_row[f"confidence_{suffix}"] = row.get(f"confidence_{suffix}", 0.0)
+            scoring_row[f"manual_{suffix}"] = ""
+        scoring_row["manual_check_required"] = ""
+        scoring_row["reviewer_notes"] = ""
+        rows.append(scoring_row)
     return pd.DataFrame(rows)
 
 

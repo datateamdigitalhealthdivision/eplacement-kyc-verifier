@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.extraction.applicant_claims import ApplicantClaims
 from src.extraction.evidence_models import OCRDocument, OCRPage
 from src.extraction.first_pass_signals import FirstPassEvidenceScanner
 from tests.helpers import make_test_settings
@@ -234,3 +235,62 @@ def test_first_pass_scanner_runs_claim_recovery_second_pass(tmp_path: Path) -> N
     assert result.marriage == "present"
     assert result.raw_payload["claim_recovery"]["marriage"]["final_status"] == "present"
     assert result.raw_payload["claim_recovery"]["marriage"]["page_labels"][0]["best_fit_bucket"] == "marriage"
+
+
+def test_claim_guided_scanner_skips_when_no_claims_exist(tmp_path: Path) -> None:
+    settings = make_test_settings(tmp_path)
+    image_path = tmp_path / "no_claims.png"
+    image_path.write_bytes(PNG_BYTES)
+    document = OCRDocument(
+        applicant_id="950213146361",
+        document_path=str(tmp_path / "950213146361.pdf"),
+        document_hash="no-claims-doc-hash",
+        processing_hash="no-claims-proc-hash",
+        pages=[OCRPage(page_number=1, extracted_text="", engine_used="vision")],
+        page_image_paths=[str(image_path)],
+        combined_text="",
+        warnings=[],
+        metadata={},
+    )
+    client = FakeVisionClient([], '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","reasons":[]}')
+
+    scanner = FirstPassEvidenceScanner(settings, client)
+    result = scanner.scan(document, claims=ApplicantClaims(), verifier_mode="claim_guided_verifier")
+
+    assert result.raw_payload["_method"] == "claim_guided_skip"
+    assert client.vision_calls == 0
+    assert client.text_calls == 0
+
+
+def test_claim_guided_scanner_filters_out_unclaimed_categories(tmp_path: Path) -> None:
+    settings = make_test_settings(tmp_path)
+    image_path = tmp_path / "claimed_only.png"
+    image_path.write_bytes(PNG_BYTES)
+    document = OCRDocument(
+        applicant_id="950213146361",
+        document_path=str(tmp_path / "950213146361.pdf"),
+        document_hash="claimed-only-doc-hash",
+        processing_hash="claimed-only-proc-hash",
+        pages=[OCRPage(page_number=1, extracted_text="", engine_used="vision")],
+        page_image_paths=[str(image_path)],
+        combined_text="",
+        warnings=[],
+        metadata={},
+    )
+    client = FakeVisionClient(
+        [
+            '{"marriage":"present","marriage_confidence":0.92,"self_illness":"present","self_illness_confidence":0.88,"family_illness":"not_present","family_illness_confidence":0,"spouse_location":"not_present","spouse_location_confidence":0,"oku_self_or_family":"not_present","oku_self_or_family_confidence":0,"medex_or_other_exam":"not_present","medex_or_other_exam_confidence":0,"best_fit_bucket":"marriage","best_fit_confidence":0.92,"reasons":["Marriage certificate visible."]}',
+        ],
+        '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","reasons":[]}',
+    )
+
+    scanner = FirstPassEvidenceScanner(settings, client)
+    claims = ApplicantClaims(claimed_marriage=True)
+    result = scanner.scan(document, claims=claims, verifier_mode="claim_guided_verifier")
+
+    assert result.marriage == "present"
+    assert result.self_illness == "not_present"
+    assert result.raw_payload["signal_details"]["marriage"]["claimed"] is True
+    assert result.raw_payload["signal_details"]["marriage"]["proof_found"] is True
+    assert result.raw_payload["signal_details"]["self_illness"]["claimed"] is False
+    assert result.raw_payload["signal_details"]["self_illness"]["proof_found"] is False
