@@ -10,31 +10,37 @@ from src.utils.confidence import average_confidence, flag_low_confidence
 from src.utils.language_guess import guess_script
 
 
-@lru_cache(maxsize=1)
-def _load_paddleocr() -> object | None:
+@lru_cache(maxsize=8)
+def _load_paddleocr(lang: str) -> object | None:
     try:
         from paddleocr import PaddleOCR  # type: ignore
     except Exception:  # noqa: BLE001
         return None
-    return PaddleOCR(use_angle_cls=True, lang="en")
+    try:
+        return PaddleOCR(use_angle_cls=True, lang=lang)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class PaddleOCRRunner:
     def __init__(self, low_confidence_threshold: float = 0.7) -> None:
         self.low_confidence_threshold = low_confidence_threshold
 
-    def is_available(self) -> bool:
-        return _load_paddleocr() is not None
+    def is_available(self, lang: str = "en") -> bool:
+        return _load_paddleocr(lang) is not None
 
-    def run_page(self, image_path: str | Path, page_number: int) -> OCRPage:
-        engine = _load_paddleocr()
+    def run_page(self, image_path: str | Path, page_number: int, lang: str = "en") -> OCRPage:
+        engine = _load_paddleocr(lang)
         if engine is None:
             return OCRPage(
                 page_number=page_number,
                 extracted_text="",
+                ocr_text="",
                 engine_used="paddleocr_unavailable",
                 confidence=0.0,
+                ocr_confidence=0.0,
                 language_guess="unknown",
+                script_guess="unknown",
                 low_confidence=True,
             )
         result = engine.ocr(str(image_path), cls=True) or []
@@ -54,9 +60,12 @@ class PaddleOCRRunner:
         return OCRPage(
             page_number=page_number,
             extracted_text=text,
-            engine_used="paddleocr",
+            ocr_text=text,
+            engine_used=f"paddleocr:{lang}",
             confidence=confidence,
+            ocr_confidence=confidence,
             language_guess=guess_script(text),
+            script_guess=guess_script(text),
             low_confidence=flag_low_confidence(confidence, self.low_confidence_threshold),
             bounding_boxes=boxes,
         )

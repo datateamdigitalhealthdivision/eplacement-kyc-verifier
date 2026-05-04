@@ -53,7 +53,7 @@ class LangflowSection(BaseModel):
 
 
 class VerifierSection(BaseModel):
-    mode: str = "claim_guided_verifier"
+    mode: str = "claim_guided_verifier_v5"
     present_confidence_threshold: float = 0.65
     early_stop_confidence_threshold: float = 0.75
 
@@ -72,7 +72,27 @@ class OCRSection(BaseModel):
     low_confidence_threshold: float = 0.7
     tesseract_languages: str = "eng+msa+ara"
     language_hints: list[str] = Field(default_factory=lambda: ["eng", "msa", "ara"])
+    tesseract_script_languages: dict[str, str] = Field(
+        default_factory=lambda: {
+            "latin": "eng+msa",
+            "arabic_script_or_jawi": "eng+msa+ara",
+            "tamil": "eng+tam",
+            "chinese": "eng+chi_sim",
+            "unknown": "eng+msa+ara",
+        }
+    )
     use_paddle_fallback: bool = True
+    paddle_default_language: str = "en"
+    paddle_script_languages: dict[str, str] = Field(
+        default_factory=lambda: {
+            "latin": "en",
+            "arabic_script_or_jawi": "ar",
+            "tamil": "ta",
+            "chinese": "ch",
+            "unknown": "en",
+        }
+    )
+    shortlist_max_pages_per_signal: int = 3
     retain_raw_text: bool = True
 
 

@@ -27,6 +27,9 @@ from src.services.review_queue import ReviewQueueService
 from src.settings import AppConfig
 
 
+CLAIM_GUIDED_MODES = {"claim_guided_verifier", "claim_guided_verifier_v5"}
+
+
 class LangflowFirstPassRunner:
     flow_name = "ePlacement Evidence Verification"
     node_order = [
@@ -79,7 +82,7 @@ class LangflowFirstPassRunner:
             try:
                 context = applicant_context(record)
                 claims = extract_applicant_claims(record.canonical)
-                if self.settings.verifier.mode == "claim_guided_verifier" and not claims.active_signals():
+                if self.settings.verifier.mode in CLAIM_GUIDED_MODES and not claims.active_signals():
                     if claims.is_unclear():
                         reason = "Claim extraction from the spreadsheet is unclear: " + ", ".join(claims.notes or claims.unclear_claims) + "."
                         result = candidate_failure_result(

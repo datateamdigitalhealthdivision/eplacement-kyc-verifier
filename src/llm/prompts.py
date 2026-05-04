@@ -73,6 +73,8 @@ def first_pass_signals_prompt(
     verifier_mode: str = "broad_classifier",
     claimed_signals: list[str] | None = None,
 ) -> str:
+    claim_guided_mode = verifier_mode in {"claim_guided_verifier", "claim_guided_verifier_v5"}
+    v5_mode = verifier_mode == "claim_guided_verifier_v5"
     vision_hint = (
         "You are also given page images from a PDF bundle. A single PDF may contain multiple different documents. "
         "Use what you can see in the images together with any OCR text.\n"
@@ -121,13 +123,17 @@ def first_pass_signals_prompt(
         "Assume the applicant may have uploaded the correct supporting pages even if OCR is weak. "
         "If the layout, header, form fields, seal, stamps, repeated keywords, or relationship context plausibly match this signal, "
         "prefer manual_check or present over not_present for that signal. "
-        "Still return all six evidence buckets and still choose exactly one best_fit_bucket.\n"
+        + (
+            "You may return best_fit_bucket as none if the page still does not clearly support a claimed category.\n"
+            if v5_mode
+            else "Still return all six evidence buckets and still choose exactly one best_fit_bucket.\n"
+        )
         if focus_signal
         else ""
     )
     active_signals = claimed_signals or []
     claim_guided_hint = ""
-    if verifier_mode == "claim_guided_verifier":
+    if claim_guided_mode:
         if active_signals:
             claim_guided_hint = (
                 "You are not classifying the full PDF. You are only verifying whether the applicant's declared claims are supported by the uploaded PDF. "
@@ -139,6 +145,22 @@ def first_pass_signals_prompt(
             claim_guided_hint = (
                 "The applicant did not claim any target evidence category. Return not_present with confidence 0 for all categories and do not infer extra categories.\n"
             )
+    evidence_rules_hint = (
+        "Evidence-specific rules:\n"
+        "- marriage: accept only clear marriage or spouse relationship proof. Jawi or BM marriage certificates can be accepted from strong visual certificate structure even if OCR is weak.\n"
+        "- self_illness: accept only medical evidence about the applicant.\n"
+        "- family_illness: accept only medical evidence about a spouse, child, parent, dependent, or family member.\n"
+        "- spouse_location: accept only spouse workplace, posting, residence, transfer, or location proof. Marriage proof alone is not spouse-location proof.\n"
+        "- oku_self_or_family: accept only explicit OKU or disability evidence.\n"
+        "- medex_or_other_exam: accept only MedEX, GCFM, postgraduate exam, specialist exam, entrance exam, exam attendance, result, registration, or certificate. Do not count routine physical examination or generic medical check-up.\n"
+    )
+    best_fit_instruction = (
+        "If all six buckets look weak or not_present, you may return best_fit_bucket as none. "
+        "Do not force a weak page into a category. "
+        "Only choose a real evidence bucket when the page clearly leans toward one of the claimed categories.\n"
+        if v5_mode
+        else "Even if all six buckets look weak or not_present, you must still choose exactly one best_fit_bucket from the six evidence buckets below. Do not use unknown or none. best_fit_bucket is your forced best guess for what these pages most likely support.\n"
+    )
     return (
         "You are doing a first-pass evidence scan for KYC review.\n"
         f"{vision_hint}"
@@ -149,11 +171,12 @@ def first_pass_signals_prompt(
         "Do not force the whole PDF into one main document type. Instead, decide whether each evidence bucket is present, not_present, or manual_check based on anything visible in the supplied pages.\n"
         "Use present when the evidence is clearly visible. Use not_present when there is no sign of it. Use manual_check only when there is a possible signal but it is too ambiguous to call present.\n"
         "Use manual_check sparingly. If the page is generic, weak, or not clearly about the target evidence, prefer not_present.\n"
-        "Even if all six buckets look weak or not_present, you must still choose exactly one best_fit_bucket from the six evidence buckets below. Do not use unknown or none. best_fit_bucket is your forced best guess for what these pages most likely support.\n"
+        f"{best_fit_instruction}"
         "best_fit_confidence must be a numeric value between 0 and 1. Use a higher value when the page layout, title, seal, form structure, or repeated weak cues point to that bucket even if the OCR is poor.\n"
         "Also decide who the visible page is mainly about. subject_role must be exactly one of applicant, spouse, family, other_person, unknown. "
         "Use applicant when the page is mainly about the applicant. Use spouse when it is mainly about the spouse. Use family when it is clearly a family member but not specifically the spouse. "
         "Use other_person when the page appears to belong to somebody else entirely. Use unknown when you cannot tell.\n"
+        f"{evidence_rules_hint}"
         "Evidence buckets:\n"
         "- marriage: actual marriage certificate or clear marriage evidence such as surat perakuan nikah or sijil nikah.\n"
         "- self_illness: evidence the applicant has illness, treatment, follow-up care, diagnosis, admission, medication, or ongoing medical issues. Use applicant context to decide whether the medical subject is the applicant. Do not mark self_illness just because a family member has a medical document.\n"

@@ -34,9 +34,14 @@ def test_build_scoring_sheet_includes_predicted_and_manual_columns(tmp_path: Pat
     assert "pred_medex_other_exam" in scoring_df.columns
     assert "claimed_marriage" in scoring_df.columns
     assert "proof_found_marriage" in scoring_df.columns
+    assert "proof_strength_marriage" in scoring_df.columns
     assert "verified_marriage" in scoring_df.columns
     assert "missing_proof_marriage" in scoring_df.columns
     assert "supporting_page_marriage" in scoring_df.columns
+    assert "document_type_marriage" in scoring_df.columns
+    assert "person_named_marriage" in scoring_df.columns
+    assert "person_role_marriage" in scoring_df.columns
+    assert "relationship_to_applicant_marriage" in scoring_df.columns
     assert "evidence_summary_marriage" in scoring_df.columns
     assert "confidence_marriage" in scoring_df.columns
     assert "manual_marriage" in scoring_df.columns

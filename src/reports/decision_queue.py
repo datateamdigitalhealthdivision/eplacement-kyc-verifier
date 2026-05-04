@@ -49,6 +49,17 @@ def _as_float(value) -> float:
     text = _text(value)
     if not text:
         return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def _as_int(value) -> int:
+    try:
+        return int(round(_as_float(value)))
+    except TypeError:
+        return 0
 
 
 def _has_meaningful_text(value) -> bool:
@@ -63,10 +74,6 @@ def _numeric_positive(value) -> bool:
         return float(text) > 0
     except ValueError:
         return False
-    try:
-        return float(text)
-    except ValueError:
-        return 0.0
 
 
 def _source_info_map(evidence_rows: list[EvidenceResult]) -> dict[str, dict[str, str]]:
@@ -175,6 +182,17 @@ def _signal_status(row: pd.Series, suffix: str) -> str:
         }[suffix]
         legacy_status = _text(row.get(legacy_column)).casefold()
         return legacy_status if legacy_status in {"present", "manual_check", "not_present"} else "not_present"
+    proof_strength_column = f"proof_strength_{suffix}"
+    if proof_strength_column in row.index:
+        claimed = _as_bool(row.get(f"claimed_{suffix}"))
+        proof_strength = _as_int(row.get(proof_strength_column))
+        if not claimed:
+            return "not_claimed"
+        if proof_strength >= 2:
+            return "present"
+        if proof_strength == 1:
+            return "manual_check"
+        return "not_present"
     claimed = _as_bool(row.get(f"claimed_{suffix}"))
     proof_found = _as_bool(row.get(f"proof_found_{suffix}"))
     missing_proof = _as_bool(row.get(f"missing_proof_{suffix}"))
@@ -287,9 +305,14 @@ def build_decision_queue(merged_df: pd.DataFrame, evidence_rows: list[EvidenceRe
             queue_row[f"{suffix}_status"] = status
             queue_row[f"claimed_{suffix}"] = claimed_flags[suffix]
             queue_row[f"proof_found_{suffix}"] = _as_bool(row.get(f"proof_found_{suffix}")) if f"proof_found_{suffix}" in row.index else status == "present"
+            queue_row[f"proof_strength_{suffix}"] = _as_int(row.get(f"proof_strength_{suffix}")) if f"proof_strength_{suffix}" in row.index else (2 if status == "present" else 1 if status == "manual_check" else 0)
             queue_row[f"verified_{suffix}"] = _as_bool(row.get(f"verified_{suffix}")) if f"verified_{suffix}" in row.index else (claimed_flags[suffix] and status == "present")
-            queue_row[f"missing_proof_{suffix}"] = _as_bool(row.get(f"missing_proof_{suffix}")) if f"missing_proof_{suffix}" in row.index else (claimed_flags[suffix] and status != "present")
+            queue_row[f"missing_proof_{suffix}"] = _as_bool(row.get(f"missing_proof_{suffix}")) if f"missing_proof_{suffix}" in row.index else (claimed_flags[suffix] and status == "not_present")
             queue_row[f"supporting_page_{suffix}"] = _text(row.get(f"supporting_page_{suffix}"))
+            queue_row[f"document_type_{suffix}"] = _text(row.get(f"document_type_{suffix}"))
+            queue_row[f"person_named_{suffix}"] = _text(row.get(f"person_named_{suffix}"))
+            queue_row[f"person_role_{suffix}"] = _text(row.get(f"person_role_{suffix}"))
+            queue_row[f"relationship_to_applicant_{suffix}"] = _text(row.get(f"relationship_to_applicant_{suffix}"))
             queue_row[f"evidence_summary_{suffix}"] = _text(row.get(f"evidence_summary_{suffix}"))
             queue_row[f"confidence_{suffix}"] = _as_float(row.get(f"confidence_{suffix}"))
 

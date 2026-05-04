@@ -294,3 +294,89 @@ def test_claim_guided_scanner_filters_out_unclaimed_categories(tmp_path: Path) -
     assert result.raw_payload["signal_details"]["marriage"]["proof_found"] is True
     assert result.raw_payload["signal_details"]["self_illness"]["claimed"] is False
     assert result.raw_payload["signal_details"]["self_illness"]["proof_found"] is False
+
+
+def test_claim_guided_v5_allows_none_best_fit_and_marks_missing_proof(tmp_path: Path) -> None:
+    settings = make_test_settings(tmp_path)
+    image_path = tmp_path / "v5_none.png"
+    image_path.write_bytes(PNG_BYTES)
+    document = OCRDocument(
+        applicant_id="950213146361",
+        document_path=str(tmp_path / "950213146361.pdf"),
+        document_hash="v5-none-doc-hash",
+        processing_hash="v5-none-proc-hash",
+        pages=[
+            OCRPage(
+                page_number=1,
+                extracted_text="generic letter",
+                ocr_text="generic letter",
+                engine_used="vision",
+                image_path=str(image_path),
+            )
+        ],
+        page_image_paths=[str(image_path)],
+        combined_text="generic letter",
+        warnings=[],
+        metadata={},
+    )
+    client = FakeVisionClient(
+        [
+            '{"marriage":"not_present","marriage_confidence":0,"self_illness":"not_present","self_illness_confidence":0,"family_illness":"not_present","family_illness_confidence":0,"spouse_location":"not_present","spouse_location_confidence":0,"oku_self_or_family":"not_present","oku_self_or_family_confidence":0,"medex_or_other_exam":"not_present","medex_or_other_exam_confidence":0,"best_fit_bucket":"none","best_fit_confidence":0.1,"subject_role":"unknown","subject_role_confidence":0.2,"reasons":["No claimed evidence is visible on this page."]}',
+        ],
+        '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","reasons":[]}',
+    )
+
+    scanner = FirstPassEvidenceScanner(settings, client)
+    claims = ApplicantClaims(claimed_marriage=True)
+    result = scanner.scan(document, claims=claims, verifier_mode="claim_guided_verifier_v5")
+
+    assert result.raw_payload["page_labels"][0]["best_fit_bucket"] == "none"
+    assert result.raw_payload["signal_details"]["marriage"]["proof_strength"] == 0
+    assert result.raw_payload["signal_details"]["marriage"]["missing_proof"] is True
+
+
+def test_claim_guided_v5_shortlists_jawi_marriage_page(tmp_path: Path) -> None:
+    settings = make_test_settings(tmp_path)
+    settings.ollama.vision_max_images = 1
+
+    image_path_1 = tmp_path / "page1.png"
+    image_path_2 = tmp_path / "page2.png"
+    image_path_1.write_bytes(PNG_BYTES)
+    image_path_2.write_bytes(PNG_BYTES)
+
+    document = OCRDocument(
+        applicant_id="930620115062",
+        document_path=str(tmp_path / "930620115062.pdf"),
+        document_hash="v5-jawi-doc-hash",
+        processing_hash="v5-jawi-proc-hash",
+        pages=[
+            OCRPage(page_number=1, extracted_text="generic memo", ocr_text="generic memo", engine_used="vision", image_path=str(image_path_1)),
+            OCRPage(
+                page_number=2,
+                extracted_text="",
+                ocr_text="",
+                engine_used="vision",
+                script_guess="arabic_script_or_jawi",
+                low_confidence=True,
+                image_path=str(image_path_2),
+            ),
+        ],
+        page_image_paths=[str(image_path_1), str(image_path_2)],
+        combined_text="",
+        warnings=[],
+        metadata={},
+    )
+
+    client = FakeVisionClient(
+        [
+            '{"marriage":"present","marriage_confidence":0.88,"self_illness":"not_present","self_illness_confidence":0,"family_illness":"not_present","family_illness_confidence":0,"spouse_location":"not_present","spouse_location_confidence":0,"oku_self_or_family":"not_present","oku_self_or_family_confidence":0,"medex_or_other_exam":"not_present","medex_or_other_exam_confidence":0,"best_fit_bucket":"marriage","best_fit_confidence":0.88,"subject_role":"applicant","subject_role_confidence":0.8,"reasons":["Jawi marriage certificate layout with official seal is visible."]}',
+        ],
+        '{"marriage":"not_present","self_illness":"not_present","family_illness":"not_present","spouse_location":"not_present","oku_self_or_family":"not_present","medex_or_other_exam":"not_present","reasons":[]}',
+    )
+
+    scanner = FirstPassEvidenceScanner(settings, client)
+    claims = ApplicantClaims(claimed_marriage=True)
+    result = scanner.scan(document, claims=claims, verifier_mode="claim_guided_verifier_v5")
+
+    assert result.raw_payload["page_labels"][0]["page"] == 2
+    assert result.raw_payload["signal_details"]["marriage"]["proof_strength"] >= 2

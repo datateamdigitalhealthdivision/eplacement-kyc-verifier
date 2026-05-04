@@ -34,7 +34,7 @@ langflow:
   enabled: true
 
 verifier:
-  mode: claim_guided_verifier
+  mode: claim_guided_verifier_v5
   present_confidence_threshold: 0.65
   early_stop_confidence_threshold: 0.75
 
@@ -54,7 +54,21 @@ ocr:
     - eng
     - msa
     - ara
+  tesseract_script_languages:
+    latin: eng+msa
+    arabic_script_or_jawi: eng+msa+ara
+    tamil: eng+tam
+    chinese: eng+chi_sim
+    unknown: eng+msa+ara
   use_paddle_fallback: true
+  paddle_default_language: en
+  paddle_script_languages:
+    latin: en
+    arabic_script_or_jawi: ar
+    tamil: ta
+    chinese: ch
+    unknown: en
+  shortlist_max_pages_per_signal: 3
   retain_raw_text: true
 
 privacy:

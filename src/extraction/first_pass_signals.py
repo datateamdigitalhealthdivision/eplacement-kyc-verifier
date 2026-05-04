@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from src.extraction.applicant_claims import ApplicantClaims, extract_applicant_claims
-from src.extraction.evidence_models import FirstPassEvidenceSignals, OCRDocument
+from src.extraction.evidence_models import FirstPassEvidenceSignals, OCRDocument, OCRPage
 from src.llm.ollama_client import OllamaClient
 from src.llm.parser import parse_model_response
 from src.llm.prompts import first_pass_signals_prompt
@@ -16,8 +16,10 @@ from src.rules.validators import row_claim_is_married, row_has_oku_claim, row_ha
 from src.settings import AppConfig
 
 
-CACHE_VERSION = "v11"
+CACHE_VERSION = "v12"
 STATUS_PRIORITY = {"not_present": 0, "manual_check": 1, "present": 2}
+CLAIM_GUIDED_MODES = {"claim_guided_verifier", "claim_guided_verifier_v5"}
+NO_FORCED_GUESS_MODES = {"claim_guided_verifier_v5"}
 SIGNAL_KEYS = [
     "marriage",
     "self_illness",
@@ -121,6 +123,7 @@ DOCUMENT_GUESS_PRESENT_THRESHOLD = 0.6
 TARGETED_PRESENT_THRESHOLD = 0.55
 TARGETED_MANUAL_THRESHOLD = 0.35
 CLAIM_GUIDED_INITIAL_PAGE_LIMIT = 2
+V5_SHORTLIST_FALLBACK_LIMIT = 2
 NEGATIVE_TEXT_VALUES = {"", "0", "tiada", "tidak", "tidak berkenaan", "none", "n/a", "na", "null"}
 SIGNAL_CONFIDENCE_KEYS = {signal: f"{signal}_confidence" for signal in SIGNAL_KEYS}
 
@@ -147,8 +150,16 @@ class FirstPassEvidenceScanner:
         return self.settings.paths.llm_json_dir / f"{processing_hash}_first_pass_{CACHE_VERSION}_{mode}{claim_suffix}{suffix}.json"
 
     @staticmethod
+    def _is_claim_guided_mode(verifier_mode: str) -> bool:
+        return verifier_mode in CLAIM_GUIDED_MODES
+
+    @staticmethod
+    def _is_v5_mode(verifier_mode: str) -> bool:
+        return verifier_mode == "claim_guided_verifier_v5"
+
+    @staticmethod
     def _active_signals(claims: ApplicantClaims | None, verifier_mode: str) -> list[str]:
-        if verifier_mode == "claim_guided_verifier":
+        if verifier_mode in CLAIM_GUIDED_MODES:
             return claims.active_signals() if claims else []
         return list(SIGNAL_KEYS)
 
@@ -294,9 +305,16 @@ class FirstPassEvidenceScanner:
         }
 
     @staticmethod
-    def _page_label_payload(page_number: int, payload: FirstPassSignalsSchema, active_signals: list[str]) -> dict[str, object]:
+    def _page_label_payload(page: OCRPage, payload: FirstPassSignalsSchema, active_signals: list[str]) -> dict[str, object]:
         result = {
-            "page": page_number,
+            "page": page.page_number,
+            "ocr_text": page.ocr_text or page.extracted_text,
+            "ocr_confidence": float(page.ocr_confidence or page.confidence or 0.0),
+            "script_guess": page.script_guess or page.language_guess or "unknown",
+            "image_path": page.image_path or "",
+            "candidate_signals": list(page.candidate_signals),
+            "matching_keywords": list(page.matching_keywords),
+            "name_or_ic_match": bool(page.name_or_ic_match),
             "best_fit_bucket": payload.best_fit_bucket,
             "best_fit_confidence": payload.best_fit_confidence,
             "subject_role": payload.subject_role,
@@ -334,6 +352,87 @@ class FirstPassEvidenceScanner:
             if signal_status in {"present", "manual_check"} or (best_fit_bucket == signal and best_fit_confidence >= TARGETED_MANUAL_THRESHOLD):
                 candidates.append(index)
         return candidates
+
+    @staticmethod
+    def _page_name_or_ic_match(page: OCRPage, applicant_context: dict[str, str] | None, signal: str) -> bool:
+        text = (page.ocr_text or page.extracted_text or "").casefold()
+        if not text:
+            return bool(page.name_or_ic_match)
+        context = applicant_context or {}
+        if signal in {"marriage", "self_illness", "medex_or_other_exam", "oku_self_or_family"}:
+            if FirstPassEvidenceScanner._contains_identifier(text, context.get("applicant_id")):
+                return True
+            if FirstPassEvidenceScanner._contains_name(text, context.get("applicant_name")):
+                return True
+        if signal in {"marriage", "family_illness", "spouse_location", "oku_self_or_family"}:
+            if FirstPassEvidenceScanner._contains_identifier(text, context.get("spouse_id")):
+                return True
+            if FirstPassEvidenceScanner._contains_name(text, context.get("spouse_name")):
+                return True
+        return bool(page.name_or_ic_match)
+
+    @staticmethod
+    def _family_context_match(page: OCRPage, applicant_context: dict[str, str] | None) -> bool:
+        text = (page.ocr_text or page.extracted_text or "").casefold()
+        if not text:
+            return False
+        return FirstPassEvidenceScanner._matches(text, FAMILY_PATTERNS)
+
+    def _shortlist_pages_for_signal_v5(
+        self,
+        signal: str,
+        document: OCRDocument,
+        applicant_context: dict[str, str] | None,
+    ) -> list[int]:
+        ranked: list[tuple[int, int]] = []
+        for index, page in enumerate(document.pages):
+            score = 0
+            if signal in page.candidate_signals:
+                score += 4
+            if self._page_name_or_ic_match(page, applicant_context, signal):
+                score += 3
+            if signal == "family_illness" and self._family_context_match(page, applicant_context):
+                score += 2
+            if signal == "marriage" and page.script_guess == "arabic_script_or_jawi":
+                score += 2
+            if signal == "marriage" and page.low_confidence and page.image_path:
+                score += 1
+            if signal == "spouse_location" and self._matches(page.ocr_text or page.extracted_text, HEURISTIC_PATTERNS["spouse_location"]):
+                score += 2
+            if signal == "oku_self_or_family" and self._matches(page.ocr_text or page.extracted_text, HEURISTIC_PATTERNS["oku_self_or_family"]):
+                score += 2
+            if signal == "medex_or_other_exam" and self._matches(page.ocr_text or page.extracted_text, HEURISTIC_PATTERNS["medex_or_other_exam"]):
+                score += 2
+            if signal in {"self_illness", "family_illness"} and self._matches(page.ocr_text or page.extracted_text, MEDICAL_PATTERNS):
+                score += 2
+            if float(page.ocr_confidence or page.confidence or 0.0) >= 0.8:
+                score += 1
+            if score > 0:
+                ranked.append((index, score))
+        ranked.sort(key=lambda item: (-item[1], item[0]))
+        shortlisted = [index for index, _ in ranked[: self.settings.ocr.shortlist_max_pages_per_signal]]
+        if shortlisted:
+            return shortlisted
+        return list(range(min(len(document.pages), V5_SHORTLIST_FALLBACK_LIMIT)))
+
+    def _claim_shortlists_v5(
+        self,
+        document: OCRDocument,
+        applicant_context: dict[str, str] | None,
+        active_signals: list[str],
+    ) -> dict[str, list[int]]:
+        return {
+            signal: self._shortlist_pages_for_signal_v5(signal, document, applicant_context)
+            for signal in active_signals
+        }
+
+    @staticmethod
+    def _union_shortlisted_pages(shortlists: dict[str, list[int]]) -> list[int]:
+        page_scores: dict[int, int] = {}
+        for pages in shortlists.values():
+            for rank, page_index in enumerate(pages):
+                page_scores[page_index] = page_scores.get(page_index, 0) + max(1, 5 - rank)
+        return [page for page, _ in sorted(page_scores.items(), key=lambda item: (-item[1], item[0]))]
 
     @staticmethod
     def _promote_targeted_signal(signal: str, page_payloads: list[dict[str, object]]) -> tuple[str, list[str]]:
@@ -598,7 +697,7 @@ class FirstPassEvidenceScanner:
     ) -> FirstPassEvidenceSignals:
         if not (self.llm_client and self.llm_client.is_enabled() and chunk_payloads):
             return self._empty_result()
-        if verifier_mode == "claim_guided_verifier":
+        if verifier_mode in CLAIM_GUIDED_MODES:
             return self._empty_result()
         overview_text = "\n".join(
             f"Pages {chunk.get('pages')}: {json.dumps(chunk, ensure_ascii=True)}" for chunk in chunk_payloads
@@ -630,6 +729,8 @@ class FirstPassEvidenceScanner:
         claims: ApplicantClaims | None,
         verifier_mode: str,
         active_signals: list[str],
+        shortlists: dict[str, list[int]] | None = None,
+        scanned_indexes: set[int] | None = None,
     ) -> tuple[FirstPassEvidenceSignals, dict[str, dict[str, object]]]:
         if not (self.llm_client and self.llm_client.is_vision_enabled() and images):
             return current_result, {}
@@ -642,9 +743,18 @@ class FirstPassEvidenceScanner:
                 continue
             if not claimed or updated_payload.get(signal) == "present":
                 continue
-            candidate_indexes = self._candidate_pages_for_signal(signal, chunk_payloads)
+            candidate_indexes = list((shortlists or {}).get(signal, []))
+            if not candidate_indexes:
+                candidate_indexes = self._candidate_pages_for_signal(signal, chunk_payloads)
             if not candidate_indexes:
                 candidate_indexes = list(range(len(images)))
+            if self._is_v5_mode(verifier_mode):
+                extras = [
+                    index
+                    for index in range(len(images))
+                    if index not in candidate_indexes and index not in (scanned_indexes or set())
+                ]
+                candidate_indexes.extend(extras[:V5_SHORTLIST_FALLBACK_LIMIT])
             page_payloads: list[dict[str, object]] = []
             for page_index in candidate_indexes:
                 page_number = page_index + 1
@@ -660,8 +770,9 @@ class FirstPassEvidenceScanner:
                             claimed_signals=active_signals,
                         ),
                         image_paths=[images[page_index]],
+                        run_secondary_on_weak_primary=self._is_v5_mode(verifier_mode),
                     )
-                    page_payload = self._page_label_payload(page_number, payload, active_signals)
+                    page_payload = self._page_label_payload(document.pages[page_index], payload, active_signals)
                     page_payload["models_used"] = models_used
                     page_payloads.append(page_payload)
                 except Exception:  # noqa: BLE001
@@ -737,6 +848,111 @@ class FirstPassEvidenceScanner:
             return 0.5
         return max(confidences, default=0.0)
 
+    def _best_support_payload(
+        self,
+        signal: str,
+        page_labels: list[dict[str, object]],
+        recovery_payload: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        payloads = self._signal_page_payloads(signal, page_labels, recovery_payload)
+        if not payloads:
+            return {}
+        return max(
+            payloads,
+            key=lambda payload: (
+                STATUS_PRIORITY.get(str(payload.get(signal) or "not_present"), 0),
+                float(payload.get(SIGNAL_CONFIDENCE_KEYS[signal]) or 0.0),
+                float(payload.get("best_fit_confidence") or 0.0),
+            ),
+        )
+
+    def _signal_document_type(self, signal: str, best_payload: dict[str, object]) -> str:
+        if not best_payload:
+            return ""
+        if signal == "marriage":
+            return "marriage_certificate"
+        if signal in {"self_illness", "family_illness"}:
+            return "medical_document"
+        if signal == "spouse_location":
+            return "spouse_location_document"
+        if signal == "oku_self_or_family":
+            return "oku_document"
+        if signal == "medex_or_other_exam":
+            return "exam_document"
+        return "supporting_document"
+
+    def _signal_person_role(self, signal: str, best_payload: dict[str, object]) -> str:
+        if not best_payload:
+            return "unknown"
+        subject_role = str(best_payload.get("subject_role") or "unknown")
+        if signal == "self_illness" and subject_role == "family":
+            return "family"
+        return subject_role
+
+    def _signal_person_named(self, signal: str, best_payload: dict[str, object], applicant_context: dict[str, str] | None) -> str:
+        if not best_payload:
+            return ""
+        role = self._signal_person_role(signal, best_payload)
+        context = applicant_context or {}
+        if role == "applicant":
+            return str(context.get("applicant_name") or context.get("applicant_id") or "")
+        if role == "spouse":
+            return str(context.get("spouse_name") or context.get("spouse_id") or "")
+        if role == "family":
+            return "family_member"
+        if role == "other_person":
+            return "other_person"
+        return ""
+
+    @staticmethod
+    def _relationship_to_applicant(role: str) -> str:
+        return {
+            "applicant": "self",
+            "spouse": "spouse",
+            "family": "family",
+            "other_person": "other_person",
+            "unknown": "unknown",
+        }.get(role, "unknown")
+
+    def _proof_strength(
+        self,
+        signal: str,
+        *,
+        claimed: bool,
+        status: str,
+        confidence: float,
+        best_payload: dict[str, object],
+    ) -> int:
+        if not claimed:
+            return 0
+        if status == "not_present":
+            return 0
+        if status == "manual_check":
+            return 1
+        subject_role = str(best_payload.get("subject_role") or "unknown")
+        signal_candidates = {str(value) for value in best_payload.get("candidate_signals", [])}
+        keyword_text = " ".join(str(value) for value in best_payload.get("matching_keywords", []))
+        base = 2 if confidence >= float(self.settings.verifier.present_confidence_threshold) else 1
+        if signal == "marriage" and best_payload.get("script_guess") == "arabic_script_or_jawi":
+            return max(base, 2)
+        if signal == "self_illness" and subject_role not in {"applicant", "unknown"}:
+            return min(base, 1)
+        if signal == "family_illness" and subject_role not in {"spouse", "family", "unknown"}:
+            return min(base, 1)
+        if signal == "spouse_location" and signal not in signal_candidates and not keyword_text:
+            return min(base, 1)
+        if signal == "oku_self_or_family" and signal not in signal_candidates:
+            return min(base, 1)
+        if signal == "medex_or_other_exam" and signal not in signal_candidates and not keyword_text:
+            return min(base, 1)
+        if signal in {"oku_self_or_family", "medex_or_other_exam"} and confidence >= 0.85:
+            return 3
+        if signal in {"marriage", "spouse_location"} and confidence >= 0.9:
+            return 3
+        if signal in {"self_illness", "family_illness"} and confidence >= 0.8:
+            return 2
+        return base
+
     def _signal_summary(
         self,
         signal: str,
@@ -776,9 +992,9 @@ class FirstPassEvidenceScanner:
         page_labels: list[dict[str, object]],
         recovery_payload: dict[str, dict[str, object]],
         fallback_payload: dict[str, object] | None = None,
+        applicant_context: dict[str, str] | None = None,
     ) -> dict[str, dict[str, object]]:
-        claim_map = claims.signal_map() if claims else {signal: verifier_mode != "claim_guided_verifier" for signal in SIGNAL_KEYS}
-        threshold = float(self.settings.verifier.present_confidence_threshold)
+        claim_map = claims.signal_map() if claims else {signal: verifier_mode not in CLAIM_GUIDED_MODES for signal in SIGNAL_KEYS}
         details: dict[str, dict[str, object]] = {}
         for signal in SIGNAL_KEYS:
             status = getattr(result, signal)
@@ -791,18 +1007,32 @@ class FirstPassEvidenceScanner:
                 recovery_payload=recovery_payload,
                 fallback_payload=fallback_payload,
             ) if claimed else 0.0
-            proof_found = claimed and status == "present" and confidence >= threshold
-            ambiguous = claimed and status == "manual_check"
-            low_confidence = claimed and status == "present" and confidence < threshold
+            best_payload = self._best_support_payload(signal, page_labels, recovery_payload) if claimed else {}
+            proof_strength = self._proof_strength(
+                signal,
+                claimed=claimed,
+                status=status,
+                confidence=confidence,
+                best_payload=best_payload,
+            )
+            proof_found = claimed and proof_strength >= 2
+            ambiguous = claimed and proof_strength == 1
+            low_confidence = claimed and status == "present" and proof_strength < 2
+            person_role = self._signal_person_role(signal, best_payload)
             details[signal] = {
                 "claimed": claimed,
                 "status": status if claimed else "not_present",
                 "proof_found": proof_found,
                 "verified": proof_found,
-                "missing_proof": claimed and not proof_found,
+                "missing_proof": claimed and proof_strength == 0,
                 "ambiguous": ambiguous,
                 "low_confidence": low_confidence,
+                "proof_strength": proof_strength,
                 "supporting_pages": supporting_pages,
+                "document_type": self._signal_document_type(signal, best_payload) if claimed else "",
+                "person_named": self._signal_person_named(signal, best_payload, applicant_context) if claimed else "",
+                "person_role": person_role if claimed else "unknown",
+                "relationship_to_applicant": self._relationship_to_applicant(person_role) if claimed else "unknown",
                 "evidence_summary": self._signal_summary(
                     signal,
                     claimed=claimed,
@@ -837,13 +1067,13 @@ class FirstPassEvidenceScanner:
     ) -> FirstPassEvidenceSignals:
         claims = claims or (extract_applicant_claims(applicant_context or {}) if applicant_context else None)
         active_signals = self._active_signals(claims, verifier_mode)
-        claim_key = "all" if verifier_mode != "claim_guided_verifier" else "-".join(active_signals) if active_signals else "none"
+        claim_key = "all" if verifier_mode not in CLAIM_GUIDED_MODES else "-".join(active_signals) if active_signals else "none"
         desired_mode, model_name = self._desired_mode(document)
         cache_path = self._cache_path(document.processing_hash, desired_mode, model_name, claim_key=claim_key)
         if cache_path.exists():
             return FirstPassEvidenceSignals.model_validate(json.loads(cache_path.read_text(encoding="utf-8")))
 
-        if verifier_mode == "claim_guided_verifier" and not active_signals:
+        if verifier_mode in CLAIM_GUIDED_MODES and not active_signals:
             skipped = self._empty_result()
             skipped.raw_payload = {
                 "_method": "claim_guided_skip",
@@ -861,6 +1091,7 @@ class FirstPassEvidenceScanner:
                 verifier_mode=verifier_mode,
                 page_labels=[],
                 recovery_payload={},
+                applicant_context=applicant_context,
             )
             cache_path.write_text(skipped.model_dump_json(indent=2) + "\n", encoding="utf-8")
             return skipped
@@ -875,11 +1106,18 @@ class FirstPassEvidenceScanner:
             chunk_payloads: list[dict[str, object]] = []
             page_labels: list[dict[str, object]] = []
             recovery_payload: dict[str, dict[str, object]] = {}
-            initial_image_count = len(images)
-            if verifier_mode == "claim_guided_verifier":
-                initial_image_count = min(len(images), CLAIM_GUIDED_INITIAL_PAGE_LIMIT)
-            for start in range(0, initial_image_count, chunk_size):
-                stop = start + chunk_size
+            scanned_indexes: set[int] = set()
+            shortlists = self._claim_shortlists_v5(document, applicant_context, active_signals) if self._is_v5_mode(verifier_mode) else {}
+            if self._is_v5_mode(verifier_mode):
+                page_indexes = self._union_shortlisted_pages(shortlists)
+            else:
+                initial_image_count = len(images)
+                if verifier_mode == "claim_guided_verifier":
+                    initial_image_count = min(len(images), CLAIM_GUIDED_INITIAL_PAGE_LIMIT)
+                page_indexes = list(range(initial_image_count))
+            for page_index in page_indexes:
+                start = page_index
+                stop = page_index + chunk_size
                 chunk_images = images[start:stop]
                 if not chunk_images:
                     continue
@@ -894,12 +1132,13 @@ class FirstPassEvidenceScanner:
                             claimed_signals=active_signals,
                         ),
                         image_paths=chunk_images,
-                        run_secondary_on_weak_primary=verifier_mode != "claim_guided_verifier",
+                        run_secondary_on_weak_primary=self._is_v5_mode(verifier_mode) or verifier_mode != "claim_guided_verifier",
                     )
                     chunk_result = FirstPassEvidenceSignals(**payload.model_dump())
-                    chunk_result = self._apply_chunk_guess_fallback(chunk_result, payload, active_signals)
+                    if verifier_mode not in NO_FORCED_GUESS_MODES:
+                        chunk_result = self._apply_chunk_guess_fallback(chunk_result, payload, active_signals)
                     chunk_results.append(chunk_result)
-                    page_label = self._page_label_payload(start + 1, payload, active_signals)
+                    page_label = self._page_label_payload(document.pages[page_index], payload, active_signals)
                     page_label["models_used"] = models_used
                     page_labels.append(page_label)
                     chunk_payloads.append(
@@ -909,23 +1148,27 @@ class FirstPassEvidenceScanner:
                             **payload.model_dump(mode="json"),
                         }
                     )
+                    scanned_indexes.add(page_index)
                 except Exception:  # noqa: BLE001
                     continue
-                if verifier_mode == "claim_guided_verifier":
+                if verifier_mode in CLAIM_GUIDED_MODES:
                     interim = self._aggregate_chunk_results(chunk_results, active_signals)
-                    interim = self._apply_document_guess_fallback(interim, chunk_payloads, active_signals)
+                    if verifier_mode not in NO_FORCED_GUESS_MODES:
+                        interim = self._apply_document_guess_fallback(interim, chunk_payloads, active_signals)
                     interim_details = self._build_signal_details(
                         interim,
                         claims=claims,
                         verifier_mode=verifier_mode,
                         page_labels=page_labels,
                         recovery_payload={},
+                        applicant_context=applicant_context,
                     )
                     if self._all_active_signals_verified(interim_details, active_signals):
                         break
             if chunk_payloads:
                 llm_result = self._aggregate_chunk_results(chunk_results, active_signals)
-                llm_result = self._apply_document_guess_fallback(llm_result, chunk_payloads, active_signals)
+                if verifier_mode not in NO_FORCED_GUESS_MODES:
+                    llm_result = self._apply_document_guess_fallback(llm_result, chunk_payloads, active_signals)
                 overview_result = self._overview_scan(
                     chunk_payloads,
                     applicant_context=applicant_context,
@@ -944,6 +1187,8 @@ class FirstPassEvidenceScanner:
                     claims=claims,
                     verifier_mode=verifier_mode,
                     active_signals=active_signals,
+                    shortlists=shortlists,
+                    scanned_indexes=scanned_indexes,
                 )
                 signal_details = self._build_signal_details(
                     result,
@@ -951,6 +1196,7 @@ class FirstPassEvidenceScanner:
                     verifier_mode=verifier_mode,
                     page_labels=page_labels,
                     recovery_payload=recovery_payload,
+                    applicant_context=applicant_context,
                 )
                 result.raw_payload = {
                     "_method": desired_mode,
@@ -969,6 +1215,7 @@ class FirstPassEvidenceScanner:
                     "active_signals": active_signals,
                     "signal_details": signal_details,
                     "claim_recovery": recovery_payload,
+                    "claim_shortlists": {signal: [index + 1 for index in indexes] for signal, indexes in shortlists.items()},
                     "overview": overview_result.raw_payload,
                 }
         elif desired_mode == "ollama_text":
@@ -991,6 +1238,7 @@ class FirstPassEvidenceScanner:
                     page_labels=[],
                     recovery_payload={},
                     fallback_payload=payload.model_dump(mode="json"),
+                    applicant_context=applicant_context,
                 )
                 result.raw_payload = {
                     "_method": desired_mode,
@@ -1029,6 +1277,7 @@ class FirstPassEvidenceScanner:
                 page_labels=list(result.raw_payload.get("page_labels", [])),
                 recovery_payload=dict(result.raw_payload.get("claim_recovery", {})),
                 fallback_payload=result.raw_payload,
+                applicant_context=applicant_context,
             )
         if desired_mode == "heuristic" or result.raw_payload.get("_method") in {desired_mode, "claim_guided_skip"}:
             cache_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")

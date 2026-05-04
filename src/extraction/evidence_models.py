@@ -29,12 +29,19 @@ SignalStatusLiteral = Literal["present", "not_present", "manual_check"]
 class OCRPage(BaseModel):
     page_number: int
     extracted_text: str = ""
+    ocr_text: str = ""
     engine_used: str
     confidence: float | None = None
+    ocr_confidence: float | None = None
     language_guess: str = "unknown"
+    script_guess: str = "unknown"
     low_confidence: bool = False
     bounding_boxes: list[list[int | float]] = Field(default_factory=list)
     source_hash: str | None = None
+    image_path: str | None = None
+    candidate_signals: list[str] = Field(default_factory=list)
+    matching_keywords: list[str] = Field(default_factory=list)
+    name_or_ic_match: bool = False
 
 
 class OCRDocument(BaseModel):

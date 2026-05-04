@@ -67,21 +67,25 @@ class OCRMyPDFRunner:
             return ""
         return f'--tessdata-dir "{self.tessdata_dir}"'
 
-    def run_page(self, image_path: str | Path, page_number: int) -> OCRPage:
+    def run_page(self, image_path: str | Path, page_number: int, languages: str | None = None) -> OCRPage:
         if self.tesseract_cmd is None:
             return OCRPage(
                 page_number=page_number,
                 extracted_text="",
+                ocr_text="",
                 engine_used="tesseract_unavailable",
                 confidence=0.0,
+                ocr_confidence=0.0,
                 language_guess="unknown",
+                script_guess="unknown",
                 low_confidence=True,
             )
         image = Image.open(image_path)
+        active_languages = languages or self.languages
         try:
             data = pytesseract.image_to_data(
                 image,
-                lang=self.languages,
+                lang=active_languages,
                 output_type=Output.DICT,
                 config=self._tesseract_config(),
             )
@@ -89,9 +93,12 @@ class OCRMyPDFRunner:
             return OCRPage(
                 page_number=page_number,
                 extracted_text="",
-                engine_used="tesseract_error",
+                ocr_text="",
+                engine_used=f"tesseract_error:{active_languages}",
                 confidence=0.0,
+                ocr_confidence=0.0,
                 language_guess="unknown",
+                script_guess="unknown",
                 low_confidence=True,
             )
         tokens = [token for token in data.get("text", []) if str(token).strip()]
@@ -119,9 +126,12 @@ class OCRMyPDFRunner:
         return OCRPage(
             page_number=page_number,
             extracted_text=text,
-            engine_used="tesseract",
+            ocr_text=text,
+            engine_used=f"tesseract:{active_languages}",
             confidence=confidence,
+            ocr_confidence=confidence,
             language_guess=guess_script(text),
+            script_guess=guess_script(text),
             low_confidence=flag_low_confidence(confidence, self.low_confidence_threshold),
             bounding_boxes=boxes,
         )

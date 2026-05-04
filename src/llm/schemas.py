@@ -79,6 +79,7 @@ class FirstPassSignalsSchema(BaseModel):
         "spouse_location",
         "oku_self_or_family",
         "medex_or_other_exam",
+        "none",
     ] | None = None
     best_fit_confidence: float = 0.0
     subject_role: Literal["applicant", "spouse", "family", "other_person", "unknown"] = "unknown"

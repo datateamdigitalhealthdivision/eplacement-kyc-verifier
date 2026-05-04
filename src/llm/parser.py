@@ -29,6 +29,7 @@ FIRST_PASS_BUCKET_ALIASES = {
     "medex or other exam": "medex_or_other_exam",
     "medex": "medex_or_other_exam",
     "exam": "medex_or_other_exam",
+    "none": "none",
 }
 SUBJECT_ROLE_ALIASES = {
     "applicant": "applicant",
