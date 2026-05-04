@@ -49,6 +49,10 @@ def _as_float(value) -> float:
     text = _text(value)
     if not text:
         return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def _has_meaningful_text(value) -> bool:
@@ -287,11 +291,16 @@ def build_decision_queue(merged_df: pd.DataFrame, evidence_rows: list[EvidenceRe
             queue_row[f"{suffix}_status"] = status
             queue_row[f"claimed_{suffix}"] = claimed_flags[suffix]
             queue_row[f"proof_found_{suffix}"] = _as_bool(row.get(f"proof_found_{suffix}")) if f"proof_found_{suffix}" in row.index else status == "present"
+            queue_row[f"proof_strength_{suffix}"] = int(_as_float(row.get(f"proof_strength_{suffix}"))) if f"proof_strength_{suffix}" in row.index else (2 if status == "present" else 1 if status == "manual_check" else 0)
             queue_row[f"verified_{suffix}"] = _as_bool(row.get(f"verified_{suffix}")) if f"verified_{suffix}" in row.index else (claimed_flags[suffix] and status == "present")
             queue_row[f"missing_proof_{suffix}"] = _as_bool(row.get(f"missing_proof_{suffix}")) if f"missing_proof_{suffix}" in row.index else (claimed_flags[suffix] and status != "present")
             queue_row[f"supporting_page_{suffix}"] = _text(row.get(f"supporting_page_{suffix}"))
+            queue_row[f"document_type_{suffix}"] = _text(row.get(f"document_type_{suffix}"))
+            queue_row[f"person_named_{suffix}"] = _text(row.get(f"person_named_{suffix}"))
+            queue_row[f"person_role_{suffix}"] = _text(row.get(f"person_role_{suffix}"))
+            queue_row[f"relationship_to_applicant_{suffix}"] = _text(row.get(f"relationship_to_applicant_{suffix}"))
             queue_row[f"evidence_summary_{suffix}"] = _text(row.get(f"evidence_summary_{suffix}"))
-            queue_row[f"confidence_{suffix}"] = _as_float(row.get(f"confidence_{suffix}"))
+            queue_row[f"confidence_{suffix}"] = _as_float(row.get(f"confidence_{suffix}")) or 0.0
 
         rows.append(queue_row)
 

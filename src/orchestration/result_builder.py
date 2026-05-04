@@ -119,7 +119,12 @@ def _default_signal_detail(signal: str, claimed: bool, status: str) -> dict[str,
         "missing_proof": claimed and status != "present",
         "ambiguous": claimed and status == "manual_check",
         "low_confidence": False,
+        "proof_strength": 2 if claimed and status == "present" else 1 if claimed and status == "manual_check" else 0,
         "supporting_pages": [],
+        "document_type": "",
+        "person_named": "",
+        "person_role": "unknown",
+        "relationship_to_applicant": "unknown",
         "evidence_summary": summary,
         "confidence": 1.0 if claimed and status == "present" else 0.5 if claimed and status == "manual_check" else 0.0,
     }
@@ -140,7 +145,12 @@ def _normalize_signal_details(first_pass_signals, claims: ApplicantClaims) -> di
         detail["missing_proof"] = bool(detail.get("missing_proof", detail["claimed"] and not detail["proof_found"]))
         detail["ambiguous"] = bool(detail.get("ambiguous", detail["claimed"] and detail["status"] == "manual_check"))
         detail["low_confidence"] = bool(detail.get("low_confidence", False))
+        detail["proof_strength"] = int(detail.get("proof_strength", 2 if detail["proof_found"] else 1 if detail["ambiguous"] else 0) or 0)
         detail["supporting_pages"] = [int(page) for page in detail.get("supporting_pages", []) if str(page).strip()]
+        detail["document_type"] = str(detail.get("document_type") or "")
+        detail["person_named"] = str(detail.get("person_named") or "")
+        detail["person_role"] = str(detail.get("person_role") or "unknown")
+        detail["relationship_to_applicant"] = str(detail.get("relationship_to_applicant") or "unknown")
         detail["evidence_summary"] = str(detail.get("evidence_summary") or _default_signal_detail(signal, detail["claimed"], detail["status"])["evidence_summary"])
         detail["confidence"] = float(detail.get("confidence") or 0.0)
         normalized[signal] = detail

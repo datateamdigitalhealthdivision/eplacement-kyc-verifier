@@ -89,7 +89,12 @@ def _default_signal_detail(signal: str, claimed: bool, status: str) -> dict[str,
         "missing_proof": claimed and status != "present",
         "ambiguous": claimed and status == "manual_check",
         "low_confidence": False,
+        "proof_strength": 2 if claimed and status == "present" else 1 if claimed and status == "manual_check" else 0,
         "supporting_pages": [],
+        "document_type": "",
+        "person_named": "",
+        "person_role": "unknown",
+        "relationship_to_applicant": "unknown",
         "evidence_summary": summary,
         "confidence": 1.0 if claimed and status == "present" else 0.5 if claimed and status == "manual_check" else 0.0,
     }
@@ -141,7 +146,12 @@ def _normalize_signal_details(record: EvidenceResult | None, claims: ApplicantCl
             "missing_proof": bool(detail.get("missing_proof", claimed and not proof_found)),
             "ambiguous": ambiguous,
             "low_confidence": low_confidence,
+            "proof_strength": int(detail.get("proof_strength", 2 if proof_found else 1 if ambiguous else 0) or 0),
             "supporting_pages": supporting_pages,
+            "document_type": _text(detail.get("document_type")),
+            "person_named": _text(detail.get("person_named")),
+            "person_role": _text(detail.get("person_role") or "unknown"),
+            "relationship_to_applicant": _text(detail.get("relationship_to_applicant") or "unknown"),
             "evidence_summary": evidence_summary,
             "confidence": confidence,
         }
@@ -219,9 +229,14 @@ def merge_results_back(source_df: pd.DataFrame, canonical_df: pd.DataFrame, evid
         for prefix in [
             "claimed",
             "proof_found",
+            "proof_strength",
             "verified",
             "missing_proof",
             "supporting_page",
+            "document_type",
+            "person_named",
+            "person_role",
+            "relationship_to_applicant",
             "evidence_summary",
             "confidence",
         ]:
@@ -307,9 +322,14 @@ def merge_results_back(source_df: pd.DataFrame, canonical_df: pd.DataFrame, evid
             detail = signal_details[signal]
             kyc_columns[f"claimed_{suffix}"].append(bool(detail["claimed"]))
             kyc_columns[f"proof_found_{suffix}"].append(bool(detail["proof_found"]))
+            kyc_columns[f"proof_strength_{suffix}"].append(int(detail.get("proof_strength") or 0))
             kyc_columns[f"verified_{suffix}"].append(bool(detail["verified"]))
             kyc_columns[f"missing_proof_{suffix}"].append(bool(detail["missing_proof"]))
             kyc_columns[f"supporting_page_{suffix}"].append(_join_pages(detail["supporting_pages"]))
+            kyc_columns[f"document_type_{suffix}"].append(_text(detail.get("document_type")))
+            kyc_columns[f"person_named_{suffix}"].append(_text(detail.get("person_named")))
+            kyc_columns[f"person_role_{suffix}"].append(_text(detail.get("person_role")))
+            kyc_columns[f"relationship_to_applicant_{suffix}"].append(_text(detail.get("relationship_to_applicant")))
             kyc_columns[f"evidence_summary_{suffix}"].append(_text(detail["evidence_summary"]))
             kyc_columns[f"confidence_{suffix}"].append(float(detail["confidence"]))
 
