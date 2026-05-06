@@ -1,0 +1,13 @@
+Metric,v4.1,v4,Change,Interpretation
+TP,415.0,415.0,0,No change vs v4
+FP,103.0,103.0,0,No change vs v4
+TN,856.0,856.0,0,No change vs v4
+FN,54.0,54.0,0,No change vs v4
+Accuracy,0.8900560224089635,0.8900560224089635,0,No change vs v4
+Sensitivity / recall,0.8848614072494669,0.8848614072494669,0,No change vs v4
+Specificity,0.8925964546402503,0.8925964546402503,0,No change vs v4
+PPV / precision,0.8011583011583011,0.8011583011583011,0,No change vs v4
+NPV,0.9406593406593406,0.9406593406593406,0,No change vs v4
+F1 score,0.8409321175278622,0.8409321175278622,0,No change vs v4
+Exact applicant match %,0.4957983193277311,0.4957983193277311,0,No change vs v4
+Review rate,0.2689075630252101,0.2689075630252101,0,No change vs v4

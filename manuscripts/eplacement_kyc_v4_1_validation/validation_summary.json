@@ -1,0 +1,61 @@
+{
+  "source_workbook": "C:\\Users\\vivek\\Downloads\\eplacement_kyc_validation_analysis_v4_1.xlsx",
+  "model_evaluated": "v4.1 (uploaded as ai-prediction-v5.csv)",
+  "validation_set": "validation-est.csv",
+  "applicants_matched": 238,
+  "binary_decisions": 1428,
+  "confusion_matrix": {
+    "tp": 415,
+    "fp": 103,
+    "tn": 856,
+    "fn": 54
+  },
+  "metrics": {
+    "accuracy": 0.8900560224089635,
+    "sensitivity_recall": 0.8848614072494669,
+    "specificity": 0.8925964546402503,
+    "ppv_precision": 0.8011583011583011,
+    "npv": 0.9406593406593406,
+    "f1_score": 0.8409321175278622,
+    "exact_applicant_match_rate": 0.4957983193277311,
+    "review_rate": 0.2689075630252101
+  },
+  "descriptive_wilson_intervals": {
+    "accuracy": {
+      "estimate": 0.8900560224089635,
+      "lower": 0.8727724689834225,
+      "upper": 0.9052465521150005
+    },
+    "sensitivity_recall": {
+      "estimate": 0.8848614072494669,
+      "lower": 0.8527947606432045,
+      "upper": 0.9106744434200591
+    },
+    "specificity": {
+      "estimate": 0.8925964546402503,
+      "lower": 0.8714098243319403,
+      "upper": 0.9106502777658502
+    },
+    "ppv_precision": {
+      "estimate": 0.8011583011583011,
+      "lower": 0.764624405474034,
+      "upper": 0.8332581703880667
+    },
+    "npv": {
+      "estimate": 0.9406593406593406,
+      "lower": 0.9233769149597395,
+      "upper": 0.9542368859440495
+    },
+    "exact_applicant_match_rate": {
+      "estimate": 0.4957983193277311,
+      "lower": 0.4328498386012444,
+      "upper": 0.558880285579211
+    },
+    "manual_review_rate": {
+      "estimate": 0.2689075630252101,
+      "lower": 0.21657517039111923,
+      "upper": 0.32858165953392254
+    }
+  },
+  "conclusion": "v4.1 output is identical to v4 for predictions and check_required flags; keep v4/v4.1 equivalent unless audit fields are needed."
+}

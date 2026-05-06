@@ -1,0 +1,7 @@
+Error type / group,Total,Flagged for review,% flagged
+False-positive decisions,103,19,0.18446601941747573
+False-negative decisions,54,29,0.5370370370370371
+Applicants with at least one false positive,92,18,0.1956521739130435
+Applicants with at least one false negative,48,25,0.5208333333333334
+Applicants with any error,120,34,0.2833333333333333
+All applicants,238,64,0.2689075630252101
