@@ -28,14 +28,14 @@ PALETTE = {
     "line": "#c7d2e5",
     "panel": "#f5f8fc",
     "panel2": "#edf7f4",
-    "teal": "#0f766e",
-    "teal2": "#14b8a6",
-    "blue": "#1d4ed8",
-    "blue2": "#60a5fa",
-    "amber": "#d97706",
-    "amber2": "#f59e0b",
-    "red": "#b91c1c",
-    "green": "#15803d",
+    "purple": "#440154",
+    "indigo": "#3B528B",
+    "blue": "#31688E",
+    "teal": "#21918C",
+    "green": "#35B779",
+    "lime": "#5DC863",
+    "yellow": "#FDE725",
+    "red": "#B63679",
     "white": "#ffffff",
 }
 
@@ -215,7 +215,7 @@ def create_figures() -> None:
     )
     boxes = [
         ("Applicant claims", "Marital, health, family, spouse-location, disability and examination claims are entered as structured form data.", PALETTE["blue"]),
-        ("Document bundles", "Applicants upload heterogeneous PDFs: scanned certificates, letters, medical notes, forms and multi-page mixed evidence.", PALETTE["amber"]),
+        ("Document bundles", "Applicants upload heterogeneous PDFs: scanned certificates, letters, medical notes, forms and multi-page mixed evidence.", PALETTE["lime"]),
         ("Verifier method", "A local-first harness checks only claimed categories, combining rules, OCR, page images and a vision-language model.", PALETTE["teal"]),
         ("Operator queue", "Outputs are tick sheets, proof summaries, page references and a targeted manual-review queue.", PALETTE["green"]),
     ]
@@ -253,10 +253,10 @@ def create_figures() -> None:
     taxonomy = [
         ("Marriage", "Marriage or nikah certificate; clear spouse relationship proof.", PALETTE["blue"]),
         ("Self illness", "Medical proof where the patient is the applicant or strongly implied to be the applicant.", PALETTE["teal"]),
-        ("Family illness", "Medical proof for spouse, child, parent, dependent or other relevant family member.", PALETTE["amber"]),
-        ("Spouse location", "Spouse workplace, posting, residence or location evidence relevant to placement.", "#7c3aed"),
+        ("Family illness", "Medical proof for spouse, child, parent, dependent or other relevant family member.", PALETTE["lime"]),
+        ("Spouse location", "Spouse workplace, posting, residence or location evidence relevant to placement.", PALETTE["purple"]),
         ("OKU self/family", "Official OKU card, JKM document, disability registration or clear disability evidence.", PALETTE["green"]),
-        ("MedEX / exam", "MedEX, GCFM, postgraduate or specialist exam registration, result, attendance or certificate; not routine physical examination.", PALETTE["red"]),
+        ("MedEX / exam", "MedEX, GCFM, postgraduate or specialist exam registration, result, attendance or certificate; not routine physical examination.", PALETTE["yellow"]),
     ]
     for i, (title, body, colour) in enumerate(taxonomy):
         row = i // 3
@@ -289,7 +289,7 @@ def create_figures() -> None:
     x = 70
     y = 270
     for i, (title, body) in enumerate(steps):
-        card(draw, (x, y, x + 285, y + 310), title, body, [PALETTE["blue"], PALETTE["teal"], PALETTE["amber"]][i % 3], fill=PALETTE["panel"], title_size=27, body_size=21)
+        card(draw, (x, y, x + 285, y + 310), title, body, [PALETTE["blue"], PALETTE["teal"], PALETTE["lime"]][i % 3], fill=PALETTE["panel"], title_size=27, body_size=21)
         if i < len(steps) - 1:
             arrow(draw, (x + 300, y + 155), (x + 355, y + 155), fill="#a8b8d6", width=4)
         x += 315
@@ -316,8 +316,8 @@ def create_figures() -> None:
     layers = [
         ("Langflow orchestration layer", "Readable workflow graph coordinates loader, fetcher, OCR router, verifier and export writer.", PALETTE["blue"]),
         ("Deterministic guardrails", "Claim extraction, unclaimed-category skipping, keyword priors, proof rules and confidence thresholds.", PALETTE["teal"]),
-        ("Document perception layer", "PDF rendering, direct text extraction, Tesseract route, PaddleOCR fallback and page-image retention.", PALETTE["amber"]),
-        ("Local multimodal model layer", "Ollama serves Qwen2.5-VL locally for page-level visual verification of claimed evidence.", "#7c3aed"),
+        ("Document perception layer", "PDF rendering, direct text extraction, Tesseract route, PaddleOCR fallback and page-image retention.", PALETTE["lime"]),
+        ("Local multimodal model layer", "Ollama serves Qwen2.5-VL locally for page-level visual verification of claimed evidence.", PALETTE["purple"]),
         ("Structured adjudication layer", "JSON schema parsing, proof_strength, supporting_page, evidence_summary and check_required policy.", PALETTE["green"]),
     ]
     for i, (title, body, colour) in enumerate(layers):
@@ -371,8 +371,9 @@ def create_figures() -> None:
     save_figure(image, "figure_5_method_shift.png")
 
     # Figure 6: evidence type performance as a scientific grouped bar chart.
-    image, draw = canvas("Evidence-Type Performance", "Sensitivity, specificity and F1 score by proof category.", size=(2300, 1450))
-    metrics = [("Sensitivity", "Sensitivity", PALETTE["blue"]), ("Specificity", "Specificity", PALETTE["teal"]), ("F1", "F1 score", PALETTE["amber"])]
+    image = Image.new("RGB", (2300, 1300), PALETTE["white"])
+    draw = ImageDraw.Draw(image)
+    metrics = [("Sensitivity", "Sensitivity", PALETTE["purple"]), ("Specificity", "Specificity", PALETTE["teal"]), ("F1", "F1 score", PALETTE["yellow"])]
     label_map = {
         "marriage": "Marriage",
         "self_illness": "Self illness",
@@ -382,8 +383,8 @@ def create_figures() -> None:
         "medex_other_exam": "MedEX/other exam",
     }
     labels = [label_map.get(str(x), str(x).replace("_", " ").title()) for x in by_evidence["Evidence type"]]
-    chart_left, chart_top = 560, 250
-    chart_width, chart_height = 1450, 930
+    chart_left, chart_top = 560, 130
+    chart_width, chart_height = 1450, 860
     chart_bottom = chart_top + chart_height
     for tick in range(0, 101, 20):
         x = chart_left + int(chart_width * tick / 100)
@@ -406,12 +407,13 @@ def create_figures() -> None:
     legend_x = 1180
     for idx, (_, label, colour) in enumerate(metrics):
         x = legend_x + idx * 270
-        draw.rectangle((x, 172, x + 42, 196), fill=colour)
-        draw.text((x + 55, 166), label, font=font(24), fill=PALETTE["ink"])
+        draw.rectangle((x, 48, x + 42, 72), fill=colour)
+        draw.text((x + 55, 42), label, font=font(24), fill=PALETTE["ink"])
     save_figure(image, "figure_6_performance_by_evidence.png")
 
     # Figure 7: manual review time as a scientific workload chart.
-    image, draw = canvas("Estimated Reviewer Time Requirement", "Manual baseline compared with the AI-assisted manual-review queue.", size=(2200, 1350))
+    image = Image.new("RGB", (2200, 1200), PALETTE["white"])
+    draw = ImageDraw.Draw(image)
     applicants = int(summary["applicants_matched"])
     review = int(round(float(summary["metrics"]["review_rate"]) * applicants))
     manual_rate_per_hour = 5
@@ -419,11 +421,11 @@ def create_figures() -> None:
     assisted_hours = review / manual_rate_per_hour
     avoided_hours = full_manual_hours - assisted_hours
     values = [
-        ("Full manual review", full_manual_hours, PALETTE["blue"]),
+        ("Full manual review", full_manual_hours, PALETTE["purple"]),
         ("AI-assisted review queue", assisted_hours, PALETTE["teal"]),
-        ("Reviewer-hours avoided", avoided_hours, PALETTE["green"]),
+        ("Reviewer-hours avoided", avoided_hours, PALETTE["yellow"]),
     ]
-    chart_left, chart_top = 280, 245
+    chart_left, chart_top = 280, 90
     chart_width, chart_height = 1580, 760
     chart_bottom = chart_top + chart_height
     max_value = 55
@@ -441,15 +443,7 @@ def create_figures() -> None:
         draw.rectangle((x1, y1, x1 + bar_w, chart_bottom), fill=colour)
         draw.text((x1 + 54, y1 - 48), f"{value:.1f}", font=font(31, True), fill=PALETTE["ink"])
         draw_wrapped(draw, label, (x1 - 40, chart_bottom + 38), bar_w + 80, font(23, True), fill=PALETTE["ink"], line_gap=6)
-    draw.text((50, chart_top + 305), "Reviewer time (person-hours)", font=font(25, True), fill=PALETTE["ink"])
-    draw_wrapped(
-        draw,
-        f"Assumption: {manual_rate_per_hour} applicant evidence bundles reviewed per hour by one reviewer. AI processing took approximately 6 unattended machine-hours on a single RTX 5080 workstation and is not counted as reviewer time.",
-        (290, 1190),
-        1560,
-        font(24),
-        fill=PALETTE["muted"],
-    )
+    draw.text((chart_left, chart_top - 55), "Reviewer time (person-hours)", font=font(25, True), fill=PALETTE["ink"])
     save_figure(image, "figure_7_review_funnel.png")
 
 

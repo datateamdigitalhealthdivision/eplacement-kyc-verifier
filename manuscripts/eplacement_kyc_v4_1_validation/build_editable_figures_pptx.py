@@ -19,12 +19,12 @@ COLORS = {
     "muted": RGBColor(91, 102, 122),
     "line": RGBColor(190, 202, 222),
     "pale": RGBColor(244, 248, 252),
-    "blue": RGBColor(37, 80, 216),
-    "teal": RGBColor(15, 118, 110),
-    "amber": RGBColor(217, 119, 6),
-    "green": RGBColor(21, 128, 61),
-    "red": RGBColor(185, 28, 28),
-    "purple": RGBColor(124, 58, 237),
+    "purple": RGBColor(68, 1, 84),
+    "blue": RGBColor(49, 104, 142),
+    "teal": RGBColor(33, 145, 140),
+    "green": RGBColor(53, 183, 121),
+    "lime": RGBColor(93, 200, 99),
+    "yellow": RGBColor(253, 231, 37),
     "white": RGBColor(255, 255, 255),
 }
 
@@ -101,7 +101,7 @@ def slide_1(prs):
     title(slide, "Administrative evidence verification problem", "People applying for placement submit structured claims and heterogeneous proof bundles.")
     items = [
         ("Applicant claims", "Structured form data records marital, health, family, location, disability and examination claims.", COLORS["blue"]),
-        ("Document bundles", "Uploaded PDFs mix certificates, letters, medical notes, forms, scans and unrelated pages.", COLORS["amber"]),
+        ("Document bundles", "Uploaded PDFs mix certificates, letters, medical notes, forms, scans and unrelated pages.", COLORS["lime"]),
         ("Verifier method", "A local-first harness checks only claimed categories using rules, OCR, page images and a VLM.", COLORS["teal"]),
         ("Operator queue", "Reviewers receive proof summaries, page references, confidence and a check/no-check decision.", COLORS["green"]),
     ]
@@ -129,10 +129,10 @@ def slide_2(prs):
     items = [
         ("Marriage", "Marriage or nikah certificate; clear spouse relationship proof.", COLORS["blue"]),
         ("Self illness", "Medical proof where the patient is the applicant or strongly implied to be the applicant.", COLORS["teal"]),
-        ("Family illness", "Medical proof for spouse, child, parent, dependent or other relevant family member.", COLORS["amber"]),
+        ("Family illness", "Medical proof for spouse, child, parent, dependent or other relevant family member.", COLORS["lime"]),
         ("Spouse location", "Spouse workplace, posting, residence or location evidence relevant to placement.", COLORS["purple"]),
         ("OKU self/family", "Official OKU card, JKM document, disability registration or clear disability evidence.", COLORS["green"]),
-        ("MedEX / exam", "MedEX, postgraduate or specialist exam evidence; not routine physical examination.", COLORS["red"]),
+        ("MedEX / exam", "MedEX, postgraduate or specialist exam evidence; not routine physical examination.", COLORS["yellow"]),
     ]
     for idx, (head, body, accent) in enumerate(items):
         row = idx // 3
@@ -155,7 +155,7 @@ def slide_3(prs):
     ]
     x = 0.35
     for i, (head, body) in enumerate(steps):
-        card(slide, x, 1.55, 1.58, 1.65, head, body, [COLORS["blue"], COLORS["teal"], COLORS["amber"]][i % 3], head_size=12, body_size=9)
+        card(slide, x, 1.55, 1.58, 1.65, head, body, [COLORS["blue"], COLORS["teal"], COLORS["lime"]][i % 3], head_size=12, body_size=9)
         if i < len(steps) - 1:
             arrow(slide, x + 1.63, 2.37, x + 1.82, 2.37)
         x += 1.85
@@ -179,7 +179,7 @@ def slide_4(prs):
     layers = [
         ("Langflow orchestration layer", "Readable workflow graph coordinates loader, fetcher, OCR router, verifier and export writer.", COLORS["blue"]),
         ("Deterministic guardrails", "Claim extraction, category skipping, keyword priors, proof rules and confidence thresholds.", COLORS["teal"]),
-        ("Document perception layer", "PDF rendering, direct text extraction, OCR fallback and page-image retention.", COLORS["amber"]),
+        ("Document perception layer", "PDF rendering, direct text extraction, OCR fallback and page-image retention.", COLORS["lime"]),
         ("Local multimodal model layer", "Ollama serves Qwen2.5-VL locally for visual verification of claimed evidence.", COLORS["purple"]),
         ("Structured adjudication layer", "Schema parsing, proof strength, supporting page, summary and review policy.", COLORS["green"]),
     ]

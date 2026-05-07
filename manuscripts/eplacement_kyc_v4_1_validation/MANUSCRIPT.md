@@ -67,72 +67,15 @@ The developed method produced an operational verifier that could ingest structur
 
 The final validation set contained 238 applicants and 1,428 evidence-level decisions. The verifier processed the full validation set in approximately six hours on the single local workstation. It produced 415 true positives, 103 false positives, 856 true negatives and 54 false negatives. Overall accuracy was 89.0%, sensitivity 88.5%, specificity 89.3%, positive predictive value 80.1%, negative predictive value 94.1% and F1 score 84.1%. Exact applicant-level agreement was 118 of 238 applicants (49.6%). The system routed 64 applicants (26.9%) for manual review and left 174 applicants (73.1%) in the no-check stream. At a manual throughput of five applicant evidence bundles per hour, full manual review of all 238 applicants would require approximately 47.6 reviewer-hours. Reviewing only the 64 flagged applicants would require approximately 12.8 reviewer-hours, corresponding to an estimated 34.8 reviewer-hours avoided, or a 73.1% reduction in direct manual review load. The six-hour runtime should be interpreted as unattended machine time rather than human reviewer time.
 
-Table 1. Overall validation performance and workload estimates for the claim-guided verifier.
-
-| Metric | Result |
-| --- | ---: |
-| Applicants matched | 238 |
-| Evidence-level binary decisions | 1,428 |
-| True positives | 415 |
-| False positives | 103 |
-| True negatives | 856 |
-| False negatives | 54 |
-| Accuracy | 89.0% |
-| Sensitivity / recall | 88.5% |
-| Specificity | 89.3% |
-| PPV / precision | 80.1% |
-| NPV | 94.1% |
-| F1 score | 84.1% |
-| Exact applicant-level matches | 118 / 238 (49.6%) |
-| Applicants flagged for manual review | 64 / 238 (26.9%) |
-| Applicants not flagged for manual review | 174 / 238 (73.1%) |
-| Approximate machine runtime | 6 hours |
-| Full manual review estimate | 47.6 person-hours |
-| AI-assisted manual review estimate | 12.8 person-hours |
-| Estimated reviewer-hours avoided | 34.8 person-hours |
-
 These results show that the verifier changed the review workload primarily by reducing the number of evidence bundles requiring immediate manual inspection, while still preserving a targeted check stream.
 
 Performance varied by evidence category. Marriage evidence performed strongly, with sensitivity of 88.8%, specificity of 98.9%, positive predictive value of 99.2% and F1 score of 93.7%. MedEX or other examination evidence also performed well, with sensitivity of 91.4%, specificity of 87.9% and F1 score of 85.1%. These categories often have distinctive document structures, official titles or examination-specific vocabulary. Family illness and spouse-location evidence remained more difficult because they require relationship resolution, not merely document-type recognition. Family illness had sensitivity of 83.9% but specificity of 69.5%, while spouse location had sensitivity of 98.1% and specificity of 75.4%. This suggests that the verifier was effective at detecting possible relational evidence, but sometimes over-called documents where the relationship or purpose of the document was not sufficiently clear.
 
-Table 2. Evidence-level validation counts by proof category.
-
-| Evidence type | Manual positives | AI positives | TP | FP | TN | FN |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Marriage | 143 | 128 | 127 | 1 | 94 | 16 |
-| Self illness | 35 | 28 | 24 | 4 | 199 | 11 |
-| Family illness | 87 | 119 | 73 | 46 | 105 | 14 |
-| Spouse location | 108 | 138 | 106 | 32 | 98 | 2 |
-| OKU self or family | 15 | 12 | 11 | 1 | 222 | 4 |
-| MedEX or other exam | 81 | 93 | 74 | 19 | 138 | 7 |
-
-The count-level results show that most residual false-positive burden arose from relational categories, particularly family illness and spouse location.
-
-Table 3. Evidence-level validation performance by proof category.
-
-| Evidence type | Accuracy | Sensitivity | Specificity | PPV | NPV | F1 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Marriage | 92.9% | 88.8% | 98.9% | 99.2% | 85.5% | 93.7% |
-| Self illness | 93.7% | 68.6% | 98.0% | 85.7% | 94.8% | 76.2% |
-| Family illness | 74.8% | 83.9% | 69.5% | 61.3% | 88.2% | 70.9% |
-| Spouse location | 85.7% | 98.1% | 75.4% | 76.8% | 98.0% | 86.2% |
-| OKU self or family | 97.9% | 73.3% | 99.6% | 91.7% | 98.2% | 81.5% |
-| MedEX or other exam | 89.1% | 91.4% | 87.9% | 79.6% | 95.2% | 85.1% |
-
 ![Figure 6. Evidence-type-specific performance.](figures/figure_6_performance_by_evidence.png)
 
+The figure shows the main evidence-type trade-off directly: highly specific categories such as marriage and OKU proof behaved differently from relational categories, where sensitivity was high but specificity was lower.
+
 The manual review flag created a smaller operational review queue, but it did not identify every residual error. Among applicants with at least one evidence-level error, 34 of 120 were flagged for review. Among applicants with at least one false negative, 25 of 48 were flagged. This distinction matters: check_required is a workflow-control signal, not a guarantee that all no-check records are error-free.
-
-Table 4. Manual-review flag behaviour among evidence-level errors and applicant-level error groups.
-
-| Error or review group | Total | Flagged for review | Percentage flagged |
-| --- | ---: | ---: | ---: |
-| False-positive evidence decisions | 103 | 19 | 18.4% |
-| False-negative evidence decisions | 54 | 29 | 53.7% |
-| Applicants with at least one false positive | 92 | 18 | 19.6% |
-| Applicants with at least one false negative | 48 | 25 | 52.1% |
-| Applicants with any evidence-level error | 120 | 34 | 28.3% |
-| All applicants | 238 | 64 | 26.9% |
 
 The operational interpretation is therefore two-sided: the system reduced immediate reviewer workload, but the no-check stream still requires monitoring, sampling and periodic recalibration.
 
