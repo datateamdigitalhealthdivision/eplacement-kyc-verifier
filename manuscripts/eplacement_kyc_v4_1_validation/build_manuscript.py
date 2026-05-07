@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = Path(__file__).resolve().parent
 WORKBOOK = Path(r"C:\Users\vivek\Downloads\eplacement_kyc_validation_analysis_v4_1.xlsx")
 MANUSCRIPT_MD = HERE / "MANUSCRIPT.md"
-OUTPUT_DOCX = HERE / "eplacement_kyc_verifier_v4_1_validation_manuscript.docx"
+OUTPUT_DOCX = HERE / "claim_guided_document_evidence_verifier_manuscript.docx"
 TABLES_DIR = HERE / "tables"
 FIGURES_DIR = HERE / "figures"
 SUMMARY_JSON = HERE / "validation_summary.json"
@@ -370,49 +370,85 @@ def create_figures() -> None:
     draw.text((845, 600), "Methodological contribution", font=font(34, True), fill=PALETTE["blue"])
     save_figure(image, "figure_5_method_shift.png")
 
-    # Figure 6: evidence type performance.
-    image, draw = canvas("Evidence-type-specific performance", "Sensitivity, specificity and F1 score from the final validation set.", size=(2300, 1500))
-    metrics = [("Sensitivity", "Sensitivity", PALETTE["blue"]), ("Specificity", "Specificity", PALETTE["teal"]), ("F1", "F1", PALETTE["amber"])]
-    labels = [str(x).replace("_", " ").replace("oku", "OKU") for x in by_evidence["Evidence type"]]
-    y0 = 260
-    row_gap = 175
+    # Figure 6: evidence type performance as a scientific grouped bar chart.
+    image, draw = canvas("Evidence-Type Performance", "Sensitivity, specificity and F1 score by proof category.", size=(2300, 1450))
+    metrics = [("Sensitivity", "Sensitivity", PALETTE["blue"]), ("Specificity", "Specificity", PALETTE["teal"]), ("F1", "F1 score", PALETTE["amber"])]
+    label_map = {
+        "marriage": "Marriage",
+        "self_illness": "Self illness",
+        "family_illness": "Family illness",
+        "spouse_location": "Spouse location",
+        "oku_self_or_family": "OKU self/family",
+        "medex_other_exam": "MedEX/other exam",
+    }
+    labels = [label_map.get(str(x), str(x).replace("_", " ").title()) for x in by_evidence["Evidence type"]]
+    chart_left, chart_top = 560, 250
+    chart_width, chart_height = 1450, 930
+    chart_bottom = chart_top + chart_height
+    for tick in range(0, 101, 20):
+        x = chart_left + int(chart_width * tick / 100)
+        draw.line((x, chart_top, x, chart_bottom), fill="#e2e8f0", width=2)
+        draw.text((x - 24, chart_bottom + 25), f"{tick}", font=font(22), fill=PALETTE["muted"])
+    draw.line((chart_left, chart_bottom, chart_left + chart_width, chart_bottom), fill=PALETTE["ink"], width=3)
+    draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=PALETTE["ink"], width=3)
+    row_gap = chart_height / len(labels)
+    bar_h = 24
     for idx, label in enumerate(labels):
-        y = y0 + idx * row_gap
-        draw.text((80, y + 30), label, font=font(27, True), fill=PALETTE["ink"])
-        for m_idx, (col, title, colour) in enumerate(metrics):
-            value = float(by_evidence.iloc[idx][col])
-            x = 610 + m_idx * 510
-            draw.rounded_rectangle((x, y + 25, x + 360, y + 70), radius=18, fill="#e5e7eb")
-            draw.rounded_rectangle((x, y + 25, x + int(360 * value), y + 70), radius=18, fill=colour)
-            draw.text((x + 375, y + 20), f"{value * 100:.1f}%", font=font(24, True), fill=PALETTE["ink"])
-    for m_idx, (_, title, colour) in enumerate(metrics):
-        x = 610 + m_idx * 510
-        draw.text((x, 205), title, font=font(28, True), fill=colour)
+        row_mid = chart_top + int(row_gap * (idx + 0.5))
+        draw.text((90, row_mid - 18), label, font=font(27, True), fill=PALETTE["ink"])
+        for m_idx, (col, _, colour) in enumerate(metrics):
+            value = float(by_evidence.iloc[idx][col]) * 100
+            y = row_mid - 42 + m_idx * 30
+            x2 = chart_left + int(chart_width * value / 100)
+            draw.rectangle((chart_left, y, x2, y + bar_h), fill=colour)
+            draw.text((x2 + 12, y - 3), f"{value:.1f}", font=font(20), fill=PALETTE["ink"])
+    draw.text((chart_left + chart_width // 2 - 110, chart_bottom + 75), "Performance (%)", font=font(25, True), fill=PALETTE["ink"])
+    legend_x = 1180
+    for idx, (_, label, colour) in enumerate(metrics):
+        x = legend_x + idx * 270
+        draw.rectangle((x, 172, x + 42, 196), fill=colour)
+        draw.text((x + 55, 166), label, font=font(24), fill=PALETTE["ink"])
     save_figure(image, "figure_6_performance_by_evidence.png")
 
-    # Figure 7: review funnel.
-    image, draw = canvas("Human-in-the-loop review burden and residual error visibility", "The verifier reduces routine review, but no-check is not yet a guarantee of perfect applicant-level agreement.", size=(2200, 1250))
+    # Figure 7: manual review time as a scientific workload chart.
+    image, draw = canvas("Estimated Reviewer Time Requirement", "Manual baseline compared with the AI-assisted manual-review queue.", size=(2200, 1350))
     applicants = int(summary["applicants_matched"])
     review = int(round(float(summary["metrics"]["review_rate"]) * applicants))
-    no_check = applicants - review
-    draw.rounded_rectangle((140, 260, 2060, 500), radius=42, fill="#eff6ff", outline="#bfdbfe", width=4)
-    draw.text((205, 330), f"{applicants} applicants", font=font(48, True), fill=PALETTE["blue"])
-    draw.text((205, 392), "entered the final validation workflow", font=font(29), fill=PALETTE["muted"])
-    arrow(draw, (720, 520), (720, 650), fill="#94a3b8", width=6)
-    arrow(draw, (1480, 520), (1480, 650), fill="#94a3b8", width=6)
-    draw.rounded_rectangle((240, 670, 1000, 980), radius=42, fill="#ecfdf5", outline="#bbf7d0", width=4)
-    draw.rounded_rectangle((1200, 670, 1960, 980), radius=42, fill="#fff7ed", outline="#fed7aa", width=4)
-    draw.text((315, 745), f"{no_check} no-check", font=font(48, True), fill=PALETTE["green"])
-    draw_wrapped(draw, "Potential first-pass clearance stream. Should still be monitored with sampling and drift checks.", (315, 815), 570, font(27), fill=PALETTE["ink"])
-    draw.text((1275, 745), f"{review} check", font=font(48, True), fill=PALETTE["amber"])
-    draw_wrapped(draw, "Targeted manual review stream for missing proof, ambiguity, low confidence or process failure.", (1275, 815), 570, font(27), fill=PALETTE["ink"])
+    manual_rate_per_hour = 5
+    full_manual_hours = applicants / manual_rate_per_hour
+    assisted_hours = review / manual_rate_per_hour
+    avoided_hours = full_manual_hours - assisted_hours
+    values = [
+        ("Full manual review", full_manual_hours, PALETTE["blue"]),
+        ("AI-assisted review queue", assisted_hours, PALETTE["teal"]),
+        ("Reviewer-hours avoided", avoided_hours, PALETTE["green"]),
+    ]
+    chart_left, chart_top = 280, 245
+    chart_width, chart_height = 1580, 760
+    chart_bottom = chart_top + chart_height
+    max_value = 55
+    for tick in range(0, 56, 10):
+        y = chart_bottom - int(chart_height * tick / max_value)
+        draw.line((chart_left, y, chart_left + chart_width, y), fill="#e2e8f0", width=2)
+        draw.text((chart_left - 70, y - 14), f"{tick}", font=font(22), fill=PALETTE["muted"])
+    draw.line((chart_left, chart_bottom, chart_left + chart_width, chart_bottom), fill=PALETTE["ink"], width=3)
+    draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=PALETTE["ink"], width=3)
+    bar_w = 280
+    spacing = 260
+    for idx, (label, value, colour) in enumerate(values):
+        x1 = chart_left + 210 + idx * (bar_w + spacing)
+        y1 = chart_bottom - int(chart_height * value / max_value)
+        draw.rectangle((x1, y1, x1 + bar_w, chart_bottom), fill=colour)
+        draw.text((x1 + 54, y1 - 48), f"{value:.1f}", font=font(31, True), fill=PALETTE["ink"])
+        draw_wrapped(draw, label, (x1 - 40, chart_bottom + 38), bar_w + 80, font(23, True), fill=PALETTE["ink"], line_gap=6)
+    draw.text((50, chart_top + 305), "Reviewer time (person-hours)", font=font(25, True), fill=PALETTE["ink"])
     draw_wrapped(
         draw,
-        "Governance point: the review flag is a workload control, not a clinical-grade safety net. Residual errors must be monitored by evidence type.",
-        (255, 1080),
-        1700,
-        font(30, True),
-        fill=PALETTE["ink"],
+        f"Assumption: {manual_rate_per_hour} applicant evidence bundles reviewed per hour by one reviewer. AI processing took approximately 6 unattended machine-hours on a single RTX 5080 workstation and is not counted as reviewer time.",
+        (290, 1190),
+        1560,
+        font(24),
+        fill=PALETTE["muted"],
     )
     save_figure(image, "figure_7_review_funnel.png")
 
@@ -469,6 +505,8 @@ def build_docx() -> None:
     styles = document.styles
     styles["Normal"].font.name = "Aptos"
     styles["Normal"].font.size = Pt(10)
+    styles["Normal"].paragraph_format.space_after = Pt(6)
+    styles["Normal"].paragraph_format.line_spacing = 1.08
     for style_name, size in [("Heading 1", 16), ("Heading 2", 13), ("Heading 3", 11)]:
         styles[style_name].font.name = "Aptos"
         styles[style_name].font.size = Pt(size)
@@ -489,6 +527,15 @@ def build_docx() -> None:
             continue
         flush_table()
         if not line.strip():
+            continue
+        if re.match(r"^Table\s+\d", line):
+            caption_para = document.add_paragraph()
+            caption_para.paragraph_format.space_before = Pt(8)
+            caption_para.paragraph_format.space_after = Pt(3)
+            caption_run = caption_para.add_run(line)
+            caption_run.bold = True
+            caption_run.italic = True
+            caption_run.font.size = Pt(9)
             continue
         image_match = re.match(r"^!\[(.*?)\]\((.*?)\)$", line)
         if image_match:

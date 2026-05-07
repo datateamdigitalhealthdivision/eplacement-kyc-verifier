@@ -10,7 +10,7 @@ This folder contains the manuscript draft for the final validation of the eplace
 - `editable_figures_1_4.pptx`: editable PowerPoint version of Figures 1-4, built with native PPT shapes and text.
 - `validation_summary.json`: generated validation metrics extracted from the final validation workbook.
 - `tables/`: generated CSV copies of key validation tables.
-- `eplacement_kyc_verifier_v4_1_validation_manuscript.docx`: generated Word manuscript.
+- `claim_guided_document_evidence_verifier_manuscript.docx`: generated Word manuscript.
 
 ## Source Files Used
 
