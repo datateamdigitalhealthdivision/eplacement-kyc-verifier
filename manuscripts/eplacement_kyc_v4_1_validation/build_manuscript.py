@@ -11,6 +11,7 @@ import pandas as pd
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
+from PIL import Image, ImageDraw, ImageFont
 
 
 HERE = Path(__file__).resolve().parent
@@ -18,7 +19,25 @@ WORKBOOK = Path(r"C:\Users\vivek\Downloads\eplacement_kyc_validation_analysis_v4
 MANUSCRIPT_MD = HERE / "MANUSCRIPT.md"
 OUTPUT_DOCX = HERE / "eplacement_kyc_verifier_v4_1_validation_manuscript.docx"
 TABLES_DIR = HERE / "tables"
+FIGURES_DIR = HERE / "figures"
 SUMMARY_JSON = HERE / "validation_summary.json"
+
+PALETTE = {
+    "ink": "#172033",
+    "muted": "#5b667a",
+    "line": "#c7d2e5",
+    "panel": "#f5f8fc",
+    "panel2": "#edf7f4",
+    "teal": "#0f766e",
+    "teal2": "#14b8a6",
+    "blue": "#1d4ed8",
+    "blue2": "#60a5fa",
+    "amber": "#d97706",
+    "amber2": "#f59e0b",
+    "red": "#b91c1c",
+    "green": "#15803d",
+    "white": "#ffffff",
+}
 
 
 def wilson_interval(successes: int, total: int, z: float = 1.96) -> dict[str, float]:
@@ -98,6 +117,306 @@ def extract_validation_tables() -> None:
     SUMMARY_JSON.write_text(json.dumps(validation_summary, indent=2), encoding="utf-8")
 
 
+def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = [
+        r"C:\Windows\Fonts\aptos-bold.ttf" if bold else r"C:\Windows\Fonts\aptos.ttf",
+        r"C:\Windows\Fonts\segoeuib.ttf" if bold else r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\arialbd.ttf" if bold else r"C:\Windows\Fonts\arial.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return ImageFont.truetype(candidate, size=size)
+    return ImageFont.load_default()
+
+
+def wrap_text(draw: ImageDraw.ImageDraw, text: str, font_obj: ImageFont.ImageFont, max_width: int) -> list[str]:
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        proposed = f"{current} {word}".strip()
+        if draw.textbbox((0, 0), proposed, font=font_obj)[2] <= max_width or not current:
+            current = proposed
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def draw_wrapped(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    xy: tuple[int, int],
+    max_width: int,
+    font_obj: ImageFont.ImageFont,
+    fill: str = PALETTE["ink"],
+    line_gap: int = 8,
+) -> int:
+    x, y = xy
+    for line in wrap_text(draw, text, font_obj, max_width):
+        draw.text((x, y), line, font=font_obj, fill=fill)
+        y += font_obj.size + line_gap
+    return y
+
+
+def arrow(draw: ImageDraw.ImageDraw, start: tuple[int, int], end: tuple[int, int], fill: str = PALETTE["line"], width: int = 5) -> None:
+    draw.line([start, end], fill=fill, width=width)
+    x1, y1 = start
+    x2, y2 = end
+    if x2 >= x1:
+        head = [(x2, y2), (x2 - 18, y2 - 12), (x2 - 18, y2 + 12)]
+    else:
+        head = [(x2, y2), (x2 + 18, y2 - 12), (x2 + 18, y2 + 12)]
+    draw.polygon(head, fill=fill)
+
+
+def card(
+    draw: ImageDraw.ImageDraw,
+    xyxy: tuple[int, int, int, int],
+    title: str,
+    body: str,
+    accent: str,
+    fill: str = PALETTE["white"],
+    title_size: int = 34,
+    body_size: int = 26,
+) -> None:
+    x1, y1, x2, y2 = xyxy
+    draw.rounded_rectangle(xyxy, radius=32, fill=fill, outline=PALETTE["line"], width=3)
+    draw.rounded_rectangle((x1, y1, x1 + 18, y2), radius=12, fill=accent)
+    draw.text((x1 + 45, y1 + 34), title, font=font(title_size, True), fill=PALETTE["ink"])
+    draw_wrapped(draw, body, (x1 + 45, y1 + 88), x2 - x1 - 90, font(body_size), fill=PALETTE["muted"], line_gap=7)
+
+
+def canvas(title: str, subtitle: str | None = None, size: tuple[int, int] = (2200, 1250)) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    image = Image.new("RGB", size, PALETTE["white"])
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, size[0], 140), fill="#ecf5ff")
+    draw.text((80, 42), title, font=font(44, True), fill=PALETTE["ink"])
+    if subtitle:
+        draw.text((82, 96), subtitle, font=font(24), fill=PALETTE["muted"])
+    return image, draw
+
+
+def save_figure(image: Image.Image, name: str) -> None:
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    image.save(FIGURES_DIR / name, optimize=True)
+
+
+def create_figures() -> None:
+    by_evidence = pd.read_excel(WORKBOOK, sheet_name="By evidence")
+    summary = json.loads(SUMMARY_JSON.read_text(encoding="utf-8"))
+
+    # Figure 1: problem and contribution.
+    image, draw = canvas(
+        "Administrative evidence verification problem",
+        "The method supports people applying for human-resource placement where claims must be backed by uploaded proof.",
+    )
+    boxes = [
+        ("Applicant claims", "Marital, health, family, spouse-location, disability and examination claims are entered as structured form data.", PALETTE["blue"]),
+        ("Document bundles", "Applicants upload heterogeneous PDFs: scanned certificates, letters, medical notes, forms and multi-page mixed evidence.", PALETTE["amber"]),
+        ("Verifier method", "A local-first harness checks only claimed categories, combining rules, OCR, page images and a vision-language model.", PALETTE["teal"]),
+        ("Operator queue", "Outputs are tick sheets, proof summaries, page references and a targeted manual-review queue.", PALETTE["green"]),
+    ]
+    x = 80
+    for i, (title, body, colour) in enumerate(boxes):
+        card(draw, (x, 230, x + 480, 580), title, body, colour, fill=PALETTE["panel"])
+        if i < len(boxes) - 1:
+            arrow(draw, (x + 500, 405), (x + 590, 405), fill="#9db1d1")
+        x += 530
+    metrics = [
+        ("238", "applicants"),
+        ("1,428", "evidence decisions"),
+        ("6", "evidence domains"),
+        ("26.9%", "manual-review queue"),
+    ]
+    for i, (value, label) in enumerate(metrics):
+        cx = 280 + i * 520
+        draw.ellipse((cx - 115, 735, cx + 115, 965), fill="#eef8f6", outline="#9bd8cd", width=4)
+        w = draw.textbbox((0, 0), value, font=font(46, True))[2]
+        draw.text((cx - w / 2, 805), value, font=font(46, True), fill=PALETTE["teal"])
+        lw = draw.textbbox((0, 0), label, font=font(23))[2]
+        draw.text((cx - lw / 2, 870), label, font=font(23), fill=PALETTE["muted"])
+    draw_wrapped(
+        draw,
+        "Contribution: a claim-guided proof verifier that treats accuracy, auditability, privacy and review workload as one coupled implementation problem.",
+        (170, 1050),
+        1850,
+        font(30, True),
+        fill=PALETTE["ink"],
+    )
+    save_figure(image, "figure_1_problem_contribution.png")
+
+    # Figure 2: evidence taxonomy.
+    image, draw = canvas("Six proof categories used by the verifier", "Evidence is only checked when the applicant has claimed that category.")
+    taxonomy = [
+        ("Marriage", "Marriage or nikah certificate; clear spouse relationship proof.", PALETTE["blue"]),
+        ("Self illness", "Medical proof where the patient is the applicant or strongly implied to be the applicant.", PALETTE["teal"]),
+        ("Family illness", "Medical proof for spouse, child, parent, dependent or other relevant family member.", PALETTE["amber"]),
+        ("Spouse location", "Spouse workplace, posting, residence or location evidence relevant to placement.", "#7c3aed"),
+        ("OKU self/family", "Official OKU card, JKM document, disability registration or clear disability evidence.", PALETTE["green"]),
+        ("MedEX / exam", "MedEX, GCFM, postgraduate or specialist exam registration, result, attendance or certificate; not routine physical examination.", PALETTE["red"]),
+    ]
+    for i, (title, body, colour) in enumerate(taxonomy):
+        row = i // 3
+        col = i % 3
+        x1 = 90 + col * 700
+        y1 = 230 + row * 390
+        card(draw, (x1, y1, x1 + 620, y1 + 300), title, body, colour, fill="#fbfcff", title_size=32, body_size=25)
+    draw.rounded_rectangle((250, 1025, 1950, 1140), radius=30, fill="#fff7ed", outline="#fed7aa", width=3)
+    draw_wrapped(
+        draw,
+        "Design rule: unclaimed categories are not labelled as positive evidence. This reduces false positives from broad document classification.",
+        (305, 1060),
+        1580,
+        font(28, True),
+        fill="#9a3412",
+    )
+    save_figure(image, "figure_2_evidence_taxonomy.png")
+
+    # Figure 3: workflow.
+    image, draw = canvas("Claim-guided document evidence workflow", "Operational pipeline from applicant form to auditable decision outputs.", size=(2300, 1350))
+    steps = [
+        ("1. Form ingest", "Column mapping and row normalisation"),
+        ("2. Claim extraction", "Convert structured fields into claimed_* booleans"),
+        ("3. PDF acquisition", "Use original link or cached local document"),
+        ("4. Render and OCR", "Direct text first; OCR for scanned pages"),
+        ("5. Page signals", "Keywords, names, ICs, layout cues and page images"),
+        ("6. AI harness", "Local VLM verifies claimed proof only"),
+        ("7. Exports", "Tick sheet, scoring sheet, review queue and audit trail"),
+    ]
+    x = 70
+    y = 270
+    for i, (title, body) in enumerate(steps):
+        card(draw, (x, y, x + 285, y + 310), title, body, [PALETTE["blue"], PALETTE["teal"], PALETTE["amber"]][i % 3], fill=PALETTE["panel"], title_size=27, body_size=21)
+        if i < len(steps) - 1:
+            arrow(draw, (x + 300, y + 155), (x + 355, y + 155), fill="#a8b8d6", width=4)
+        x += 315
+    draw.rounded_rectangle((180, 760, 2120, 1120), radius=36, fill="#f8fafc", outline="#cbd5e1", width=3)
+    draw.text((240, 815), "Safeguards embedded across the workflow", font=font(34, True), fill=PALETTE["ink"])
+    safeguards = [
+        "Skip unclaimed categories",
+        "Cache OCR and model outputs",
+        "Second-pass targeted verification",
+        "Structured JSON parsing",
+        "Proof-strength scoring",
+        "Original PDF links retained",
+        "Manual review triggers",
+    ]
+    for i, item in enumerate(safeguards):
+        x0 = 255 + (i % 4) * 465
+        y0 = 900 + (i // 4) * 90
+        draw.rounded_rectangle((x0, y0, x0 + 395, y0 + 58), radius=20, fill="#e0f2fe", outline="#bae6fd")
+        draw.text((x0 + 24, y0 + 16), item, font=font(21, True), fill="#075985")
+    save_figure(image, "figure_3_workflow.png")
+
+    # Figure 4: harness architecture.
+    image, draw = canvas("AI harness and local inference architecture", "The cool part: model calls are constrained by deterministic context, schema and audit policy.", size=(2300, 1400))
+    layers = [
+        ("Langflow orchestration layer", "Readable workflow graph coordinates loader, fetcher, OCR router, verifier and export writer.", PALETTE["blue"]),
+        ("Deterministic guardrails", "Claim extraction, unclaimed-category skipping, keyword priors, proof rules and confidence thresholds.", PALETTE["teal"]),
+        ("Document perception layer", "PDF rendering, direct text extraction, Tesseract route, PaddleOCR fallback and page-image retention.", PALETTE["amber"]),
+        ("Local multimodal model layer", "Ollama serves Qwen2.5-VL locally for page-level visual verification of claimed evidence.", "#7c3aed"),
+        ("Structured adjudication layer", "JSON schema parsing, proof_strength, supporting_page, evidence_summary and check_required policy.", PALETTE["green"]),
+    ]
+    for i, (title, body, colour) in enumerate(layers):
+        y1 = 220 + i * 205
+        card(draw, (140, y1, 1580, y1 + 145), title, body, colour, fill="#fbfdff", title_size=31, body_size=24)
+    for i in range(4):
+        arrow(draw, (860, 370 + i * 205), (860, 425 + i * 205), fill="#94a3b8", width=5)
+    draw.rounded_rectangle((1680, 270, 2150, 1050), radius=40, fill="#f0fdfa", outline="#99f6e4", width=4)
+    draw.text((1735, 330), "Why this matters", font=font(34, True), fill=PALETTE["teal"])
+    bullets = [
+        "No external document API required",
+        "Prompt sees applicant claims",
+        "Model cannot reward unclaimed categories",
+        "Outputs are auditable, not just labels",
+        "Operator can inspect source PDF immediately",
+    ]
+    y = 410
+    for item in bullets:
+        draw.ellipse((1735, y + 9, 1755, y + 29), fill=PALETTE["teal"])
+        y = draw_wrapped(draw, item, (1775, y), 310, font(25), fill=PALETTE["ink"], line_gap=7) + 22
+    save_figure(image, "figure_4_ai_harness.png")
+
+    # Figure 5: broad vs claim-guided.
+    image, draw = canvas("From broad classification to claim-guided proof verification", "The methodological shift is from guessing document type to testing applicant-declared claims.", size=(2200, 1250))
+    draw.rounded_rectangle((120, 245, 1010, 1000), radius=42, fill="#fff1f2", outline="#fecdd3", width=4)
+    draw.rounded_rectangle((1190, 245, 2080, 1000), radius=42, fill="#ecfdf5", outline="#bbf7d0", width=4)
+    draw.text((180, 310), "Broad classifier", font=font(40, True), fill=PALETTE["red"])
+    draw.text((1250, 310), "Claim-guided verifier", font=font(40, True), fill=PALETTE["green"])
+    broad = [
+        "Scans the whole PDF for all six classes",
+        "May label plausible but unclaimed evidence",
+        "More false positives from generic letters or medical pages",
+        "Useful for discovery, weaker for proof checking",
+    ]
+    guided = [
+        "Reads applicant form first",
+        "Only verifies categories the applicant claimed",
+        "Stops when claimed proof is sufficiently supported",
+        "Designed for triage and audit, not autonomous rejection",
+    ]
+    y = 410
+    for item in broad:
+        draw.text((185, y), "x", font=font(30, True), fill=PALETTE["red"])
+        y = draw_wrapped(draw, item, (230, y), 690, font(28), fill=PALETTE["ink"]) + 32
+    y = 410
+    for item in guided:
+        draw.text((1255, y), "+", font=font(30, True), fill=PALETTE["green"])
+        y = draw_wrapped(draw, item, (1300, y), 690, font(28), fill=PALETTE["ink"]) + 32
+    draw.rounded_rectangle((760, 555, 1440, 695), radius=34, fill="#eff6ff", outline="#bfdbfe", width=3)
+    draw.text((845, 600), "Methodological contribution", font=font(34, True), fill=PALETTE["blue"])
+    save_figure(image, "figure_5_method_shift.png")
+
+    # Figure 6: evidence type performance.
+    image, draw = canvas("Evidence-type-specific performance", "Sensitivity, specificity and F1 score from the final validation set.", size=(2300, 1500))
+    metrics = [("Sensitivity", "Sensitivity", PALETTE["blue"]), ("Specificity", "Specificity", PALETTE["teal"]), ("F1", "F1", PALETTE["amber"])]
+    labels = [str(x).replace("_", " ").replace("oku", "OKU") for x in by_evidence["Evidence type"]]
+    y0 = 260
+    row_gap = 175
+    for idx, label in enumerate(labels):
+        y = y0 + idx * row_gap
+        draw.text((80, y + 30), label, font=font(27, True), fill=PALETTE["ink"])
+        for m_idx, (col, title, colour) in enumerate(metrics):
+            value = float(by_evidence.iloc[idx][col])
+            x = 610 + m_idx * 510
+            draw.rounded_rectangle((x, y + 25, x + 360, y + 70), radius=18, fill="#e5e7eb")
+            draw.rounded_rectangle((x, y + 25, x + int(360 * value), y + 70), radius=18, fill=colour)
+            draw.text((x + 375, y + 20), f"{value * 100:.1f}%", font=font(24, True), fill=PALETTE["ink"])
+    for m_idx, (_, title, colour) in enumerate(metrics):
+        x = 610 + m_idx * 510
+        draw.text((x, 205), title, font=font(28, True), fill=colour)
+    save_figure(image, "figure_6_performance_by_evidence.png")
+
+    # Figure 7: review funnel.
+    image, draw = canvas("Human-in-the-loop review burden and residual error visibility", "The verifier reduces routine review, but no-check is not yet a guarantee of perfect applicant-level agreement.", size=(2200, 1250))
+    applicants = int(summary["applicants_matched"])
+    review = int(round(float(summary["metrics"]["review_rate"]) * applicants))
+    no_check = applicants - review
+    draw.rounded_rectangle((140, 260, 2060, 500), radius=42, fill="#eff6ff", outline="#bfdbfe", width=4)
+    draw.text((205, 330), f"{applicants} applicants", font=font(48, True), fill=PALETTE["blue"])
+    draw.text((205, 392), "entered the final validation workflow", font=font(29), fill=PALETTE["muted"])
+    arrow(draw, (720, 520), (720, 650), fill="#94a3b8", width=6)
+    arrow(draw, (1480, 520), (1480, 650), fill="#94a3b8", width=6)
+    draw.rounded_rectangle((240, 670, 1000, 980), radius=42, fill="#ecfdf5", outline="#bbf7d0", width=4)
+    draw.rounded_rectangle((1200, 670, 1960, 980), radius=42, fill="#fff7ed", outline="#fed7aa", width=4)
+    draw.text((315, 745), f"{no_check} no-check", font=font(48, True), fill=PALETTE["green"])
+    draw_wrapped(draw, "Potential first-pass clearance stream. Should still be monitored with sampling and drift checks.", (315, 815), 570, font(27), fill=PALETTE["ink"])
+    draw.text((1275, 745), f"{review} check", font=font(48, True), fill=PALETTE["amber"])
+    draw_wrapped(draw, "Targeted manual review stream for missing proof, ambiguity, low confidence or process failure.", (1275, 815), 570, font(27), fill=PALETTE["ink"])
+    draw_wrapped(
+        draw,
+        "Governance point: the review flag is a workload control, not a clinical-grade safety net. Residual errors must be monitored by evidence type.",
+        (255, 1080),
+        1700,
+        font(30, True),
+        fill=PALETTE["ink"],
+    )
+    save_figure(image, "figure_7_review_funnel.png")
+
+
 def split_table_row(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
@@ -171,6 +490,22 @@ def build_docx() -> None:
         flush_table()
         if not line.strip():
             continue
+        image_match = re.match(r"^!\[(.*?)\]\((.*?)\)$", line)
+        if image_match:
+            caption = image_match.group(1).strip()
+            image_path = (HERE / image_match.group(2).strip()).resolve()
+            if image_path.exists():
+                paragraph = document.add_paragraph()
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = paragraph.add_run()
+                run.add_picture(str(image_path), width=Inches(6.8))
+                if caption:
+                    caption_para = document.add_paragraph()
+                    caption_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    caption_run = caption_para.add_run(caption)
+                    caption_run.italic = True
+                    caption_run.font.size = Pt(9)
+            continue
         if line.startswith("# "):
             document.add_heading(line[2:].strip(), level=0)
         elif line.startswith("## "):
@@ -190,6 +525,7 @@ def build_docx() -> None:
 
 def main() -> None:
     extract_validation_tables()
+    create_figures()
     build_docx()
     print(f"Wrote {OUTPUT_DOCX}")
     print(f"Wrote {SUMMARY_JSON}")
